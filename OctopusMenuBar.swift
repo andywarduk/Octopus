@@ -92,6 +92,17 @@ func isCheap(_ s: Snapshot, now: Date) -> Bool {
     currentInterval(cheapIntervals(s, now: now), now: now) != nil
 }
 
+/// Fetch every 5 minutes, or every 30 seconds within 3 minutes either side of a rate switch.
+func fetchInterval(_ s: Snapshot?, now: Date) -> TimeInterval {
+    guard let s else { return 300 }
+    let window: TimeInterval = 3 * 60
+    // Look back one window so intervals that ended just now still count as a recent switch.
+    let nearSwitch = cheapIntervals(s, now: now.addingTimeInterval(-window)).contains {
+        abs($0.start.timeIntervalSince(now)) <= window || abs($0.end.timeIntervalSince(now)) <= window
+    }
+    return nearSwitch ? 30 : 300
+}
+
 func formatted(_ date: Date, _ format: String, _ tz: TimeZone) -> String {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_GB")
@@ -450,7 +461,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     func tick() {
         updateIcon()
         checkUpcomingCheap()
-        if Date().timeIntervalSince(snapshot?.fetched ?? .distantPast) > 300 { refresh() }
+        let now = Date()
+        // A small tolerance stops a tick landing just short of the interval from waiting a whole extra tick.
+        if now.timeIntervalSince(snapshot?.fetched ?? .distantPast) >= fetchInterval(snapshot, now: now) - 5 { refresh() }
     }
 
     /// Alerts once when a cheap window (fixed or smart-charge) is about to start.

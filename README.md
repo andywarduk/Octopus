@@ -32,8 +32,9 @@ your login Keychain, never in a file. Get the key from the API access page of yo
 ### Refreshing
 
 - The icon and cheap/standard decision are recalculated every 30 seconds from data already held.
-- Fresh data is fetched from Octopus every 5 minutes, when the menu is opened and the data is over
-  a minute old, and from **Refresh now**.
+- Fresh data is fetched from Octopus every 5 minutes, or every 30 seconds within 3 minutes either side
+  of a rate change (cheap starting or ending).
+- It also fetches when the menu is opened and the data is over a minute old, and from **Refresh now**.
 
 ### Notes
 
