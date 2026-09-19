@@ -6,6 +6,7 @@
 
 import Cocoa
 import Security
+import UserNotifications
 
 // MARK: - Model
 
@@ -392,7 +393,7 @@ func makeAppIcon() -> NSImage {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     var snapshot: Snapshot?
@@ -401,10 +402,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?
+    /// Cheap-interval start times already announced, so each one alerts once.
+    var notified = Set<Date>()
+    static let leadTime: TimeInterval = 10 * 60
+    var notifyEnabled: Bool { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.applicationIconImage = makeAppIcon()
         apiKey = Keychain.read()
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         menu.delegate = self
         menu.autoenablesItems = false
         item.menu = menu
@@ -417,7 +424,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func tick() {
         updateIcon()
+        checkUpcomingCheap()
         if Date().timeIntervalSince(snapshot?.fetched ?? .distantPast) > 300 { refresh() }
+    }
+
+    /// Alerts once when a cheap window (fixed or smart-charge) is about to start.
+    func checkUpcomingCheap() {
+        guard notifyEnabled, let s = snapshot else { return }
+        let now = Date()
+        let intervals = cheapIntervals(s, now: now)
+        guard currentInterval(intervals, now: now) == nil, let next = intervals.first else { return }
+        let lead = next.start.timeIntervalSince(now)
+        guard lead > 0, lead <= Self.leadTime, !notified.contains(next.start) else { return }
+        notified = notified.filter { $0 > now }
+        notified.insert(next.start)
+        let mins = max(1, Int((lead / 60).rounded()))
+        post(
+            title: "Cheap rate in \(mins) min",
+            body: "From \(formatted(next.start, "HH:mm", s.tz)): \(pence(s.cheapRate)) (now \(pence(s.peakRate)))")
+    }
+
+    func post(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    // Show banners even though the app is technically frontmost.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 
     func refresh() {
@@ -509,22 +550,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         for (title, action, key) in [
             ("Refresh now", #selector(refreshNow), "r"),
+            ("Alert 10 min before cheap rate", #selector(toggleNotify), ""),
+            ("Send test alert", #selector(testAlert), ""),
             ("Set API Key…", #selector(setKey), ""),
             ("Quit", #selector(quit), "q"),
         ] {
             let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
             mi.target = self
+            if action == #selector(toggleNotify) { mi.state = notifyEnabled ? .on : .off }
             menu.addItem(mi)
         }
     }
 
     @objc func refreshNow() { refresh() }
 
+    @objc func toggleNotify() {
+        UserDefaults.standard.set(!notifyEnabled, forKey: "notifyBeforeCheap")
+        rebuildMenu()
+    }
+
+    @objc func testAlert() {
+        post(title: "Cheap rate in 10 min", body: "This is a test alert.")
+    }
+
     @objc func quit() { NSApp.terminate(nil) }
 
     @objc func setKey() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
+        alert.icon = makeAppIcon()
         alert.messageText = "Octopus API key"
         alert.informativeText = "Paste your API key (sk_live_…). It is stored in your login Keychain."
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
@@ -563,6 +617,20 @@ func selfTest() {
             }
         }
     }
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--icon"), i + 1 < CommandLine.arguments.count {
+    // OctopusMenuBar --icon out.png : render the app icon to a PNG.
+    let icon = makeAppIcon()
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: 512, pixelsHigh: 512, bitsPerSample: 8, samplesPerPixel: 4,
+        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    icon.draw(in: NSRect(x: 0, y: 0, width: 512, height: 512))
+    NSGraphicsContext.restoreGraphicsState()
+    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--selftest") {
