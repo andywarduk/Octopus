@@ -2,7 +2,7 @@
 // your car's charge level, and the upcoming cheap-rate windows.
 //
 // Build: ./build.sh     Run: open build/OctopusMenuBar.app
-// The API key is entered from the menu (Set API Key…) and stored in the login Keychain.
+// The API key is entered in Settings… and stored in the login Keychain.
 
 import Cocoa
 import Security
@@ -435,6 +435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var snapshot: Snapshot?
     var lastError: String?
     var loading = false
+    var settingsWindow: NSWindow?
+    var keyField: NSSecureTextField?
+    var keyStatus: NSTextField?
+    var notifyCheck: NSButton?
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?
@@ -608,23 +612,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         menu.addItem(.separator())
         for (title, action, key) in [
             ("Refresh now", #selector(refreshNow), "r"),
-            ("Alert 10 min before cheap rate", #selector(toggleNotify), ""),
-            ("Send test alert", #selector(testAlert), ""),
-            ("Set API Key…", #selector(setKey), ""),
+            ("Settings…", #selector(showSettings), ","),
             ("Quit", #selector(quit), "q"),
         ] {
             let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
             mi.target = self
-            if action == #selector(toggleNotify) { mi.state = notifyEnabled ? .on : .off }
             menu.addItem(mi)
         }
     }
 
     @objc func refreshNow() { refresh() }
 
-    @objc func toggleNotify() {
-        UserDefaults.standard.set(!notifyEnabled, forKey: "notifyBeforeCheap")
-        rebuildMenu()
+    @objc func toggleNotify(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "notifyBeforeCheap")
     }
 
     @objc func testAlert() {
@@ -641,22 +641,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     @objc func quit() { NSApp.terminate(nil) }
 
-    @objc func setKey() {
+    @objc func showSettings() {
+        if settingsWindow == nil { buildSettingsWindow() }
+        keyField?.stringValue = ""
+        keyStatus?.stringValue = apiKey == nil ? "No key saved" : "A key is saved in your Keychain"
+        notifyCheck?.state = notifyEnabled ? .on : .off
         NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.icon = makeAppIcon()
-        alert.messageText = "Octopus API key"
-        alert.informativeText = "Paste your API key (sk_live_…). It is stored in your login Keychain."
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func buildSettingsWindow() {
+        let heading = NSTextField(labelWithString: "Octopus API key")
+        heading.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+
+        let field = NSSecureTextField()
+        field.placeholderString = "sk_live_…"
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        let save = NSButton(title: "Save", target: self, action: #selector(saveKey))
+        save.keyEquivalent = "\r"
+        let keyRow = NSStackView(views: [field, save])
+        keyRow.spacing = 8
+
+        let status = NSTextField(labelWithString: "")
+        status.font = .systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+
+        let check = NSButton(
+            checkboxWithTitle: "Alert 10 minutes before the cheap rate starts", target: self,
+            action: #selector(toggleNotify(_:)))
+        let test = NSButton(title: "Send Test Alert", target: self, action: #selector(testAlert))
+
+        let stack = NSStackView(views: [heading, keyRow, status, check, test])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.setCustomSpacing(20, after: status)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        // Pin the stack inside a container so the 20pt margin holds on every side.
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -20),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+        ])
+        container.layoutSubtreeIfNeeded()
+
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: container.fittingSize), styleMask: [.titled, .closable],
+            backing: .buffered, defer: false)
+        window.title = "Octopus Settings"
+        window.contentView = container
+        window.setContentSize(container.fittingSize)
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        settingsWindow = window
+        keyField = field
+        keyStatus = status
+        notifyCheck = check
+    }
+
+    @objc func saveKey() {
+        let value = (keyField?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         Keychain.save(value)
         apiKey = value
+        keyField?.stringValue = ""
+        keyStatus?.stringValue = "Key saved"
         snapshot = nil
         lastError = nil
         refresh()

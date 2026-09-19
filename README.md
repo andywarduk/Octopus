@@ -16,7 +16,7 @@ Requires macOS 13 or later and Xcode's command line tools (`swiftc`).
 open build/OctopusMenuBar.app
 ```
 
-On first launch choose **Set API Key…** from the menu and paste your Octopus API key. It is stored in
+On first launch choose **Settings…** from the menu and paste your Octopus API key. It is stored in
 your login Keychain, never in a file. Get the key from the API access page of your Octopus dashboard.
 
 ### What it shows
@@ -27,7 +27,7 @@ your login Keychain, never in a file. Get the key from the API access page of yo
   - The current rate and when it next changes.
   - Each car's charge level, target, and charging status.
   - The cheap windows in the next 48 hours, including smart-charging dispatches.
-- **Alert:** a notification 10 minutes before a cheap window starts. Toggle it, or send a test, from the menu.
+- **Alert:** a notification 10 minutes before a cheap window starts. Turn it on or off, or send a test, in Settings.
 
 ### Refreshing
 
