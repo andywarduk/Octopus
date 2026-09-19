@@ -22,6 +22,9 @@ struct Car {
     var target: Int?
     var state: String?
     var asOf: Date?
+    var powerKw: Double?
+    var powerAsOf: Date?
+    var suspended: Bool?
 }
 
 struct Snapshot {
@@ -112,6 +115,28 @@ func stamp(_ date: Date, now: Date, _ tz: TimeZone) -> String {
 
 func pence(_ v: Double) -> String { String(format: "%.2fp/kWh", v) }
 
+/// Octopus doesn't report "plugged in" directly, so infer charging from the live power reading
+/// and the smart-control state.
+func chargingStatus(_ car: Car, now: Date) -> String? {
+    let state = car.state ?? ""
+    let freshPower = car.powerAsOf.map { now.timeIntervalSince($0) < 20 * 60 } ?? false
+    if freshPower, let kw = car.powerKw, kw > 0.05 {
+        let mode = state == "BOOSTING" ? " · boost" : state == "SMART_CONTROL_IN_PROGRESS" ? " · smart charging" : ""
+        return String(format: "Charging %.1f kW", kw) + mode
+    }
+    if car.suspended == true { return "Charging paused" }
+    switch state {
+    case "BOOSTING": return "Boost charge requested"
+    case "SMART_CONTROL_IN_PROGRESS": return "Smart charging scheduled"
+    case "SMART_CONTROL_CAPABLE", "SMART_CONTROL_OFF", "SETUP_COMPLETE":
+        return freshPower ? "Not charging" : nil
+    case "SMART_CONTROL_NOT_AVAILABLE": return "Not charging · smart control not available"
+    case "LOST_CONNECTION": return "Lost connection to car"
+    case "": return freshPower ? "Not charging" : nil
+    default: return state.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
 func menuLines(_ s: Snapshot, now: Date) -> [Line] {
     let tz = s.tz
     let cal = calendar(tz)
@@ -137,12 +162,8 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
             var title = "\(car.name): \(Int(soc.rounded()))%"
             if let target = car.target { title += " (target \(target)%)" }
             lines.append(.text(title))
-            var detail: [String] = []
-            if let asOf = car.asOf { detail.append("as of \(formatted(asOf, "HH:mm", tz))") }
-            if let state = car.state {
-                detail.append(state.replacingOccurrences(of: "_", with: " ").lowercased())
-            }
-            if !detail.isEmpty { lines.append(.text("    " + detail.joined(separator: " · "))) }
+            if let status = chargingStatus(car, now: now) { lines.append(.text("    " + status)) }
+            if let asOf = car.asOf { lines.append(.text("    Charge level as of \(formatted(asOf, "HH:mm", tz))")) }
         } else {
             lines.append(.text("\(car.name): no charge level reported"))
         }
@@ -338,11 +359,11 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
               __typename id name
               ... on SmartFlexVehicle{
                 make model
-                status{... on SmartFlexVehicleStatus{currentState stateOfCharge{value timestamp}}}
+                status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
                 chargingPreferences{weekdayTargetSoc weekendTargetSoc}
               }
               ... on SmartFlexChargePoint{
-                status{... on SmartFlexChargePointStatus{currentState stateOfCharge{value timestamp}}}
+                status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
               }
             }}
             """, ["a": account], token: token)
@@ -352,6 +373,7 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
             guard type == "SmartFlexVehicle" || type == "SmartFlexChargePoint" else { continue }
             let status = d["status"] as? [String: Any]
             let soc = status?["stateOfCharge"] as? [String: Any]
+            let power = status?["activePower"] as? [String: Any]
             let prefs = d["chargingPreferences"] as? [String: Any]
             let label = [d["make"], d["model"]].compactMap { $0 as? String }.joined(separator: " ")
             cars.append(
@@ -360,7 +382,10 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
                     soc: toDouble(soc?["value"]),
                     target: (prefs?[weekend ? "weekendTargetSoc" : "weekdayTargetSoc"] as? NSNumber)?.intValue,
                     state: status?["currentState"] as? String,
-                    asOf: parseDate(soc?["timestamp"])))
+                    asOf: parseDate(soc?["timestamp"]),
+                    powerKw: toDouble(power?["value"]),
+                    powerAsOf: parseDate(power?["timestamp"]),
+                    suspended: status?["isSuspended"] as? Bool))
         }
     } catch {
         // Charge level is secondary; the rate display still works without it.
@@ -633,7 +658,11 @@ func selfTest() {
     let snap = Snapshot(
         cheapRate: 6.5714, peakRate: 28.9251, windows: fallbackWindows,
         dispatches: [Interval(start: date("2026-09-20T12:00:00Z"), end: date("2026-09-20T13:30:00Z"), smart: true)],
-        cars: [Car(name: "Mini Cooper", soc: 62, target: 100, state: "SMART_CONTROL_NOT_AVAILABLE", asOf: date("2026-09-19T14:08:36Z"))],
+        cars: [
+            Car(name: "Mini Cooper", soc: 62, target: 100, state: "SMART_CONTROL_NOT_AVAILABLE", asOf: date("2026-09-19T14:08:36Z")),
+            Car(name: "Test EV", soc: 45, target: 80, state: "SMART_CONTROL_IN_PROGRESS", asOf: date("2026-09-19T15:10:00Z"),
+                powerKw: 7.2, powerAsOf: date("2026-09-19T15:10:00Z")),
+        ],
         tz: tz, fetched: date("2026-09-19T15:13:00Z"))
     for (label, now) in [("Sat 16:13 BST", "2026-09-19T15:13:00Z"), ("Sun 02:00 BST", "2026-09-20T01:00:00Z")] {
         print("--- \(label): cheap=\(isCheap(snap, now: date(now)))")
