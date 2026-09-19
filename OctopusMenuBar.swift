@@ -439,18 +439,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         notified = notified.filter { $0 > now }
         notified.insert(next.start)
         let mins = max(1, Int((lead / 60).rounded()))
-        post(
-            title: "Cheap rate in \(mins) min",
-            body: "From \(formatted(next.start, "HH:mm", s.tz)): \(pence(s.cheapRate)) (now \(pence(s.peakRate)))")
+        let body = "From \(formatted(next.start, "HH:mm", s.tz)): \(pence(s.cheapRate)) (now \(pence(s.peakRate)))"
+        Task { await post(title: "Cheap rate in \(mins) min", body: body) }
     }
 
-    func post(title: String, body: String) {
+    /// Posts a notification. Returns a description of what's wrong if it couldn't be delivered.
+    @discardableResult
+    func post(title: String, body: String) async -> String? {
+        let center = UNUserNotificationCenter.current()
+        var settings = await center.notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+            settings = await center.notificationSettings()
+        }
+        let settingsHint = "Open System Settings → Notifications → Octopus Menu Bar and allow notifications."
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral: break
+        case .denied: return "Notifications are turned off for this app. \(settingsHint)"
+        default: return "macOS hasn't granted notification permission (status \(settings.authorizationStatus.rawValue)). \(settingsHint)"
+        }
+        if settings.alertSetting != .enabled {
+            return "Alerts are disabled for this app (style is None). \(settingsHint)"
+        }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        do {
+            try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        } catch {
+            return "macOS refused the notification: \(error.localizedDescription)"
+        }
+        return nil
     }
 
     // Show banners even though the app is technically frontmost.
@@ -570,7 +590,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     @objc func testAlert() {
-        post(title: "Cheap rate in 10 min", body: "This is a test alert.")
+        Task {
+            guard let problem = await post(title: "Cheap rate in 10 min", body: "This is a test alert.") else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.icon = makeAppIcon()
+            alert.messageText = "Couldn't send the alert"
+            alert.informativeText = problem
+            alert.runModal()
+        }
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -619,17 +647,24 @@ func selfTest() {
     }
 }
 
-if let i = CommandLine.arguments.firstIndex(of: "--icon"), i + 1 < CommandLine.arguments.count {
-    // OctopusMenuBar --icon out.png : render the app icon to a PNG.
-    let icon = makeAppIcon()
+func renderIcon(pixels: Int, to path: String) {
     let rep = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: 512, pixelsHigh: 512, bitsPerSample: 8, samplesPerPixel: 4,
+        bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8, samplesPerPixel: 4,
         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    icon.draw(in: NSRect(x: 0, y: 0, width: 512, height: 512))
+    makeAppIcon().draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels))
     NSGraphicsContext.restoreGraphicsState()
-    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+}
+
+// OctopusMenuBar --iconset DIR : write the PNGs that `iconutil -c icns` expects.
+if let i = CommandLine.arguments.firstIndex(of: "--iconset"), i + 1 < CommandLine.arguments.count {
+    let dir = CommandLine.arguments[i + 1]
+    for size in [16, 32, 128, 256, 512] {
+        renderIcon(pixels: size, to: "\(dir)/icon_\(size)x\(size).png")
+        renderIcon(pixels: size * 2, to: "\(dir)/icon_\(size)x\(size)@2x.png")
+    }
     exit(0)
 }
 
