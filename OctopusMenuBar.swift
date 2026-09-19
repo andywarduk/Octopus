@@ -398,9 +398,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var snapshot: Snapshot?
     var lastError: String?
     var loading = false
+    /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
+    /// prompt can't take keyboard input while menu tracking has focus.
+    var apiKey: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.applicationIconImage = makeAppIcon()
+        apiKey = Keychain.read()
         menu.delegate = self
         menu.autoenablesItems = false
         item.menu = menu
@@ -418,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func refresh() {
         guard !loading else { return }
-        guard let key = Keychain.read() else {
+        guard let key = apiKey else {
             lastError = "No API key set"
             updateIcon()
             return
@@ -465,6 +469,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Date().timeIntervalSince(snapshot?.fetched ?? .distantPast) > 60 { refresh() }
     }
 
+    /// A custom-view item: it never highlights on hover, and unlike a disabled item it isn't dimmed.
+    func infoItem(_ title: String, font: NSFont, color: NSColor) -> NSMenuItem {
+        let label = NSTextField(labelWithString: title)
+        label.font = font
+        label.textColor = color
+        label.sizeToFit()
+        let inset = NSPoint(x: 14, y: 3)
+        let view = NSView(frame: NSRect(
+            x: 0, y: 0, width: label.frame.width + inset.x * 2, height: label.frame.height + inset.y * 2))
+        label.frame.origin = inset
+        view.autoresizingMask = [.width]
+        view.addSubview(label)
+        let mi = NSMenuItem()
+        mi.view = view
+        return mi
+    }
+
     func rebuildMenu() {
         menu.removeAllItems()
         if let s = snapshot {
@@ -473,19 +494,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case .separator:
                     menu.addItem(.separator())
                 case .header(let t):
-                    let mi = NSMenuItem(title: t, action: nil, keyEquivalent: "")
-                    mi.attributedTitle = NSAttributedString(
-                        string: t, attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
-                    menu.addItem(mi)
+                    menu.addItem(infoItem(t, font: .boldSystemFont(ofSize: NSFont.systemFontSize), color: .labelColor))
                 case .text(let t):
-                    menu.addItem(NSMenuItem(title: t, action: nil, keyEquivalent: ""))
+                    let detail = t.hasPrefix("    ") || t.hasPrefix("Updated")
+                    menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: detail ? .secondaryLabelColor : .labelColor))
                 }
             }
         } else {
-            menu.addItem(NSMenuItem(title: loading ? "Loading…" : "No data yet", action: nil, keyEquivalent: ""))
+            menu.addItem(infoItem(loading ? "Loading…" : "No data yet", font: .menuFont(ofSize: 0), color: .labelColor))
         }
         if let e = lastError {
-            menu.addItem(NSMenuItem(title: "⚠︎ \(e)", action: nil, keyEquivalent: ""))
+            menu.addItem(infoItem("⚠︎ \(e)", font: .menuFont(ofSize: 0), color: .labelColor))
         }
         menu.addItem(.separator())
         for (title, action, key) in [
@@ -517,6 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         Keychain.save(value)
+        apiKey = value
         snapshot = nil
         lastError = nil
         refresh()
