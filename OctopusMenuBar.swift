@@ -459,6 +459,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// long outage can't hammer the API; "Refresh now" clears it.
     var failures = 0
     var autoRefreshPaused = false
+    var menuIsOpen = false
+    var rebuildPending = false
     static let maxFailures = 10
     static let leadTime: TimeInterval = 10 * 60
     var notifyEnabled: Bool { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
@@ -598,9 +600,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         item.button?.toolTip = tip
     }
 
+    // Called before the menu is shown, so rebuilding here is safe.
     func menuNeedsUpdate(_ menu: NSMenu) {
         rebuildMenu()
         if Date().timeIntervalSince(snapshot?.fetched ?? .distantPast) > 60 { refresh() }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuIsOpen = false
+        if rebuildPending {
+            rebuildPending = false
+            rebuildMenu()
+        }
     }
 
     /// A custom-view item: it never highlights on hover, and unlike a disabled item it isn't dimmed.
@@ -621,6 +634,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     func rebuildMenu() {
+        // Tearing items out from under an open menu makes it flicker or close, so wait until it shuts.
+        guard !menuIsOpen else {
+            rebuildPending = true
+            return
+        }
         menu.removeAllItems()
         if let s = snapshot {
             for line in menuLines(s, now: Date()) {
