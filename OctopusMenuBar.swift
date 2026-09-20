@@ -134,20 +134,31 @@ func pence(_ v: Double) -> String { String(format: "%.2fp/kWh", v) }
 func chargingStatus(_ car: Car, now: Date) -> String? {
     let state = car.state ?? ""
     let freshPower = car.powerAsOf.map { now.timeIntervalSince($0) < 20 * 60 } ?? false
+
+    // A lost connection explains anything else we might say, so it wins.
+    if state == "LOST_CONNECTION" { return "Lost connection to car" }
+
+    // isSuspended means Octopus's smart control is paused, not that charging has stopped: a
+    // suspended car left plugged in still draws power. It says nothing when control isn't available.
+    let paused = car.suspended == true && state != "SMART_CONTROL_NOT_AVAILABLE"
+    func annotated(_ text: String) -> String { paused ? text + " · smart control paused" : text }
+
     if freshPower, let kw = car.powerKw, kw > 0.05 {
-        let mode = state == "BOOSTING" ? " · boost" : state == "SMART_CONTROL_IN_PROGRESS" ? " · smart charging" : ""
-        return String(format: "Charging %.1f kW", kw) + mode
+        let charging = String(format: "Charging %.1f kW", kw)
+        switch state {
+        case "BOOSTING": return charging + " · boost"
+        case "SMART_CONTROL_IN_PROGRESS": return charging + " · smart charging"
+        default: return annotated(charging)
+        }
     }
-    if car.suspended == true { return "Charging paused" }
     switch state {
     case "BOOSTING": return "Boost charge requested"
     case "SMART_CONTROL_IN_PROGRESS": return "Smart charging scheduled"
-    case "SMART_CONTROL_CAPABLE", "SMART_CONTROL_OFF", "SETUP_COMPLETE":
-        return freshPower ? "Not charging" : nil
     case "SMART_CONTROL_NOT_AVAILABLE": return "Not charging · smart control not available"
-    case "LOST_CONNECTION": return "Lost connection to car"
-    case "": return freshPower ? "Not charging" : nil
-    default: return state.replacingOccurrences(of: "_", with: " ").capitalized
+    case "SMART_CONTROL_CAPABLE", "SMART_CONTROL_OFF", "SETUP_COMPLETE", "":
+        if freshPower { return annotated("Not charging") }
+        return paused ? "Smart control paused" : nil
+    default: return annotated(state.replacingOccurrences(of: "_", with: " ").capitalized)
     }
 }
 
@@ -786,6 +797,20 @@ func selfTest() {
                 powerKw: 7.2, powerAsOf: date("2026-09-19T15:10:00Z")),
         ],
         tz: tz, fetched: date("2026-09-19T15:13:00Z"))
+    let then = date("2026-09-19T15:10:00Z")
+    print("--- charging status")
+    for (label, car) in [
+        ("charging, suspended", Car(name: "", state: "SMART_CONTROL_CAPABLE", powerKw: 7.2, powerAsOf: then, suspended: true)),
+        ("charging, smart", Car(name: "", state: "SMART_CONTROL_IN_PROGRESS", powerKw: 7.2, powerAsOf: then)),
+        ("idle, suspended", Car(name: "", state: "SMART_CONTROL_CAPABLE", suspended: true)),
+        ("idle, suspended, no control", Car(name: "", state: "SMART_CONTROL_NOT_AVAILABLE", suspended: true)),
+        ("offline, suspended", Car(name: "", state: "LOST_CONNECTION", suspended: true)),
+        ("idle, plugged in", Car(name: "", state: "SMART_CONTROL_CAPABLE", powerKw: 0, powerAsOf: then)),
+        ("nothing known", Car(name: "")),
+    ] {
+        print("  \(label): \(chargingStatus(car, now: date("2026-09-19T15:13:00Z")) ?? "(no line)")")
+    }
+
     for (label, now) in [("Sat 16:13 BST", "2026-09-19T15:13:00Z"), ("Sun 02:00 BST", "2026-09-20T01:00:00Z")] {
         print("--- \(label): cheap=\(isCheap(snap, now: date(now)))")
         for line in menuLines(snap, now: date(now)) {
