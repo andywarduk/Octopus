@@ -460,7 +460,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var failures = 0
     var autoRefreshPaused = false
     var menuIsOpen = false
-    var rebuildPending = false
     static let maxFailures = 10
     static let leadTime: TimeInterval = 10 * 60
     var notifyEnabled: Bool { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
@@ -573,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             }
             loading = false
             updateIcon()
-            rebuildMenu()
+            // No rebuildMenu() here: menuNeedsUpdate rebuilds before the menu is next displayed.
         }
     }
 
@@ -608,13 +607,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
 
-    func menuDidClose(_ menu: NSMenu) {
-        menuIsOpen = false
-        if rebuildPending {
-            rebuildPending = false
-            rebuildMenu()
-        }
-    }
+    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
 
     /// A custom-view item: it never highlights on hover, and unlike a disabled item it isn't dimmed.
     func infoItem(_ title: String, font: NSFont, color: NSColor) -> NSMenuItem {
@@ -634,11 +627,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     func rebuildMenu() {
-        // Tearing items out from under an open menu makes it flicker or close, so wait until it shuts.
-        guard !menuIsOpen else {
-            rebuildPending = true
-            return
-        }
+        // Tearing items out from under an open menu makes it flicker or close. menuNeedsUpdate
+        // rebuilds before each display, so there's nothing to catch up on afterwards.
+        guard !menuIsOpen else { return }
         menu.removeAllItems()
         if let s = snapshot {
             for line in menuLines(s, now: Date()) {
