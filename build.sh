@@ -7,7 +7,7 @@ APP="build/OctopusMenuBar.app"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS"
 
-swiftc -O -o "$APP/Contents/MacOS/OctopusMenuBar" OctopusMenuBar.swift
+swiftc -O -o "$APP/Contents/MacOS/OctopusMenuBar" *.swift
 
 # Notifications take their icon from the bundle, so render the app icon into an .icns.
 mkdir -p "$APP/Contents/Resources" build/AppIcon.iconset

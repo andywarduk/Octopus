@@ -3,7 +3,7 @@
 Tools for checking your Octopus Energy rate (built around Intelligent Octopus Go) using the
 [Kraken GraphQL API](https://developer.octopus.energy/graphql).
 
-- **`OctopusMenuBar.swift`**: a macOS menu bar app that shows whether you're on the cheap or
+- **`*.swift`**: a macOS menu bar app that shows whether you're on the cheap or
   standard rate, your car's charge level and charging status, and upcoming cheap windows.
 - **`octopus_rate.py`**: a command-line version showing the same rate, charge level and charging status.
 
@@ -49,6 +49,24 @@ your login Keychain, never in a file. Get the key from the API access page of yo
   the app still builds, but notifications use a generic icon.
 - `OctopusMenuBar --selftest` prints sample menus from fixed data, without using the network.
   `OctopusMenuBar --iconset DIR` writes the icon PNGs.
+
+### Source layout
+
+`build.sh` compiles every `.swift` file in the repository root into one binary.
+
+| File | Contents |
+| --- | --- |
+| `Model.swift` | `Interval`, `Car`, `Snapshot`, `Line` |
+| `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
+| `Keychain.swift` | Reading, saving and removing the API key |
+| `OctopusAPI.swift` | GraphQL calls that build a `Snapshot` |
+| `AppIcon.swift` | The app icon, drawn in code |
+| `AppDelegate.swift` | Status item, the 30-second tick, and the refresh cycle |
+| `AppDelegate+Menu.swift` | Icon state and menu building |
+| `AppDelegate+Notifications.swift` | "Cheap rate soon" alerts |
+| `AppDelegate+Settings.swift` | The Settings window |
+| `SelfTest.swift` | `--selftest` output |
+| `main.swift` | Entry point and command-line flags |
 
 ## Command-line script
 

@@ -1,0 +1,199 @@
+// Rate logic: pure functions over a Snapshot, so they can be tested without the network.
+
+import Foundation
+
+func calendar(_ tz: TimeZone) -> Calendar {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = tz
+    return cal
+}
+
+/// Cheap intervals that haven't ended yet and start within the next 48 hours, merged and sorted.
+func cheapIntervals(_ s: Snapshot, now: Date) -> [Interval] {
+    guard s.hasCheapRate else { return [] }
+    let cal = calendar(s.tz)
+    let today = cal.startOfDay(for: now)
+    var all: [Interval] = []
+    for offset in -1...2 {
+        guard let day = cal.date(byAdding: .day, value: offset, to: today) else { continue }
+        for w in s.windows {
+            let endDay = w.to <= w.from ? cal.date(byAdding: .day, value: 1, to: day) ?? day : day
+            guard
+                let start = cal.date(bySettingHour: w.from / 60, minute: w.from % 60, second: 0, of: day),
+                let end = cal.date(bySettingHour: w.to / 60, minute: w.to % 60, second: 0, of: endDay)
+            else { continue }
+            all.append(Interval(start: start, end: end, smart: false))
+        }
+    }
+    all += s.dispatches
+    let horizon = now.addingTimeInterval(48 * 3600)
+    all = all.filter { $0.end > now && $0.start < horizon }.sorted { $0.start < $1.start }
+
+    var merged: [Interval] = []
+    for i in all {
+        if var last = merged.last, i.start <= last.end {
+            last.end = max(last.end, i.end)
+            last.smart = last.smart && i.smart
+            merged[merged.count - 1] = last
+        } else {
+            merged.append(i)
+        }
+    }
+    return merged
+}
+
+func currentInterval(_ intervals: [Interval], now: Date) -> Interval? {
+    intervals.first { $0.start <= now && now < $0.end }
+}
+
+func isCheap(_ s: Snapshot, now: Date) -> Bool {
+    currentInterval(cheapIntervals(s, now: now), now: now) != nil
+}
+
+/// How far either side of a rate switch counts as "about to change".
+let switchWindow: TimeInterval = 3 * 60
+
+/// Fetch every 5 minutes, or every 30 seconds within `switchWindow` either side of a rate switch.
+/// Takes intervals computed with a `switchWindow` lookback, so a switch just gone still counts.
+func fetchInterval(_ recent: [Interval], now: Date) -> TimeInterval {
+    let nearSwitch = recent.contains {
+        abs($0.start.timeIntervalSince(now)) <= switchWindow || abs($0.end.timeIntervalSince(now)) <= switchWindow
+    }
+    return nearSwitch ? 30 : 300
+}
+
+/// DateFormatter is costly to build and a menu rebuild formats a dozen dates, so keep one per
+/// format and timezone. Formatting itself is thread-safe; the lock only guards the dictionary.
+private final class FormatterCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cache: [String: DateFormatter] = [:]
+
+    func formatter(_ format: String, _ tz: TimeZone) -> DateFormatter {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = "\(format)|\(tz.identifier)"
+        if let f = cache[key] { return f }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_GB")
+        f.timeZone = tz
+        f.dateFormat = format
+        cache[key] = f
+        return f
+    }
+}
+
+private let formatters = FormatterCache()
+
+func formatted(_ date: Date, _ format: String, _ tz: TimeZone) -> String {
+    formatters.formatter(format, tz).string(from: date)
+}
+
+func dayLabel(_ date: Date, now: Date, _ tz: TimeZone) -> String {
+    let cal = calendar(tz)
+    if cal.isDate(date, inSameDayAs: now) { return "Today" }
+    if let tomorrow = cal.date(byAdding: .day, value: 1, to: now), cal.isDate(date, inSameDayAs: tomorrow) {
+        return "Tomorrow"
+    }
+    if let yesterday = cal.date(byAdding: .day, value: -1, to: now), cal.isDate(date, inSameDayAs: yesterday) {
+        return "Yesterday"
+    }
+    return formatted(date, "EEE", tz)
+}
+
+func stamp(_ date: Date, now: Date, _ tz: TimeZone) -> String {
+    "\(dayLabel(date, now: now, tz)) \(formatted(date, "HH:mm", tz))"
+}
+
+func pence(_ v: Double) -> String { String(format: "%.2fp/kWh", v) }
+
+/// Octopus doesn't report "plugged in" directly, so infer charging from the live power reading
+/// and the smart-control state.
+func chargingStatus(_ car: Car, now: Date) -> String? {
+    let state = car.state ?? ""
+    let freshPower = car.powerAsOf.map { now.timeIntervalSince($0) < 20 * 60 } ?? false
+
+    // A lost connection explains anything else we might say, so it wins.
+    if state == "LOST_CONNECTION" { return "Lost connection to car" }
+
+    // isSuspended means Octopus's smart control is paused, not that charging has stopped: a
+    // suspended car left plugged in still draws power. It says nothing when control isn't available.
+    let paused = car.suspended == true && state != "SMART_CONTROL_NOT_AVAILABLE"
+    func annotated(_ text: String) -> String { paused ? text + " · smart control paused" : text }
+
+    if freshPower, let kw = car.powerKw, kw > 0.05 {
+        let charging = String(format: "Charging %.1f kW", kw)
+        switch state {
+        case "BOOSTING": return charging + " · boost"
+        case "SMART_CONTROL_IN_PROGRESS": return charging + " · smart charging"
+        default: return annotated(charging)
+        }
+    }
+    switch state {
+    case "BOOSTING": return "Boost charge requested"
+    case "SMART_CONTROL_IN_PROGRESS": return "Smart charging scheduled"
+    case "SMART_CONTROL_NOT_AVAILABLE": return "Not charging · smart control not available"
+    case "SMART_CONTROL_CAPABLE", "SMART_CONTROL_OFF", "SETUP_COMPLETE", "":
+        if freshPower { return annotated("Not charging") }
+        return paused ? "Smart control paused" : nil
+    default: return annotated(state.replacingOccurrences(of: "_", with: " ").capitalized)
+    }
+}
+
+func menuLines(_ s: Snapshot, now: Date) -> [Line] {
+    let tz = s.tz
+    let cal = calendar(tz)
+    let intervals = cheapIntervals(s, now: now)
+    let active = currentInterval(intervals, now: now)
+    var lines: [Line] = []
+
+    if !s.hasCheapRate {
+        lines.append(.header("Single rate · \(pence(s.peakRate))"))
+        lines.append(.text("This tariff has no cheap window"))
+    } else if let active {
+        lines.append(.header("Cheap rate now · \(pence(s.cheapRate))"))
+        lines.append(.text("Back to standard at \(stamp(active.end, now: now, tz)) (\(pence(s.peakRate)))"))
+    } else {
+        lines.append(.header("Standard rate now · \(pence(s.peakRate))"))
+        if let next = intervals.first {
+            lines.append(.text("Cheap from \(stamp(next.start, now: now, tz)) (\(pence(s.cheapRate)))"))
+        }
+    }
+
+    lines.append(.separator)
+    lines.append(.header(s.cars.count == 1 ? "Car" : "Cars"))
+    if s.cars.isEmpty { lines.append(.text("No smart devices found")) }
+    for car in s.cars {
+        if let soc = car.soc {
+            var title = "\(car.name): \(Int(soc.rounded()))%"
+            if let target = car.target { title += " (target \(target)%)" }
+            lines.append(.text(title))
+            if let status = chargingStatus(car, now: now) { lines.append(.text("    " + status)) }
+            if let asOf = car.asOf { lines.append(.text("    Charge level as of \(stamp(asOf, now: now, tz))")) }
+        } else {
+            lines.append(.text("\(car.name): no charge level reported"))
+        }
+    }
+
+    guard s.hasCheapRate else {
+        lines.append(.separator)
+        lines.append(.text("Updated \(formatted(s.fetched, "HH:mm", tz))"))
+        return lines
+    }
+
+    lines.append(.separator)
+    lines.append(.header("Upcoming cheap rate"))
+    if intervals.isEmpty { lines.append(.text("None in the next 48 hours")) }
+    for i in intervals.prefix(6) {
+        let isActive = i.start <= now
+        let from = isActive ? "Now" : stamp(i.start, now: now, tz)
+        let sameDay = cal.isDate(i.start, inSameDayAs: i.end)
+        let to = sameDay ? formatted(i.end, "HH:mm", tz) : stamp(i.end, now: now, tz)
+        var text = "\(from) – \(to)"
+        if i.smart { text += "  (smart charge)" }
+        lines.append(.text(text))
+    }
+
+    lines.append(.separator)
+    lines.append(.text("Updated \(formatted(s.fetched, "HH:mm", tz))"))
+    return lines
+}
