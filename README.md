@@ -35,6 +35,8 @@ your login Keychain, never in a file. Get the key from the API access page of yo
 - Fresh data is fetched from Octopus every 5 minutes, or every 30 seconds within 3 minutes either side
   of a rate change (cheap starting or ending).
 - It also fetches when the menu is opened and the data is over a minute old, and from **Refresh now**.
+- After 10 consecutive failures it stops fetching and shows the error in the menu, so a bad key or an
+  outage can't keep hitting the API. **Refresh now** (or saving a key) starts it again.
 
 ### Notes
 

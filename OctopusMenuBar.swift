@@ -117,6 +117,9 @@ func dayLabel(_ date: Date, now: Date, _ tz: TimeZone) -> String {
     if let tomorrow = cal.date(byAdding: .day, value: 1, to: now), cal.isDate(date, inSameDayAs: tomorrow) {
         return "Tomorrow"
     }
+    if let yesterday = cal.date(byAdding: .day, value: -1, to: now), cal.isDate(date, inSameDayAs: yesterday) {
+        return "Yesterday"
+    }
     return formatted(date, "EEE", tz)
 }
 
@@ -174,7 +177,7 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
             if let target = car.target { title += " (target \(target)%)" }
             lines.append(.text(title))
             if let status = chargingStatus(car, now: now) { lines.append(.text("    " + status)) }
-            if let asOf = car.asOf { lines.append(.text("    Charge level as of \(formatted(asOf, "HH:mm", tz))")) }
+            if let asOf = car.asOf { lines.append(.text("    Charge level as of \(stamp(asOf, now: now, tz))")) }
         } else {
             lines.append(.text("\(car.name): no charge level reported"))
         }
@@ -219,24 +222,32 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func save(_ value: String) {
-        let base: [String: Any] = [
+    private static var base: [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(base as CFDictionary)
-        var item = base
-        item[kSecValueData as String] = Data(value.utf8)
-        SecItemAdd(item as CFDictionary, nil)
     }
 
-    static func delete() {
-        SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ] as CFDictionary)
+    /// Updates an existing item in place, or adds one. Updating rather than delete-then-add means a
+    /// failure can't leave the keychain with no key at all. Returns errSecSuccess or the failure.
+    static func save(_ value: String) -> OSStatus {
+        let data = Data(value.utf8)
+        let updated = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if updated != errSecItemNotFound { return updated }
+        var item = base
+        item[kSecValueData as String] = data
+        return SecItemAdd(item as CFDictionary, nil)
+    }
+
+    @discardableResult
+    static func delete() -> OSStatus {
+        SecItemDelete(base as CFDictionary)
+    }
+
+    static func message(_ status: OSStatus) -> String {
+        (SecCopyErrorMessageString(status, nil) as String?) ?? "Keychain error \(status)"
     }
 }
 
@@ -444,6 +455,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var apiKey: String?
     /// Cheap-interval start times already announced, so each one alerts once.
     var notified = Set<Date>()
+    /// Consecutive failed fetches. Automatic refreshing stops at maxFailures so a bad key or a
+    /// long outage can't hammer the API; "Refresh now" clears it.
+    var failures = 0
+    var autoRefreshPaused = false
+    static let maxFailures = 10
     static let leadTime: TimeInterval = 10 * 60
     var notifyEnabled: Bool { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
 
@@ -523,8 +539,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         completionHandler([.banner, .sound])
     }
 
-    func refresh() {
+    /// - Parameter manual: true for "Refresh now" and after a key change, which resumes automatic
+    ///   refreshing if it has stopped.
+    func refresh(manual: Bool = false) {
         guard !loading else { return }
+        if manual {
+            failures = 0
+            autoRefreshPaused = false
+        } else if autoRefreshPaused {
+            return
+        }
         guard let key = apiKey else {
             lastError = "No API key set"
             updateIcon()
@@ -535,8 +559,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             do {
                 snapshot = try await fetchSnapshot(apiKey: key)
                 lastError = nil
+                failures = 0
             } catch {
-                lastError = error.localizedDescription
+                failures += 1
+                if failures >= Self.maxFailures {
+                    autoRefreshPaused = true
+                    lastError = "\(error.localizedDescription) — stopped after \(Self.maxFailures) failed attempts. Choose Refresh now to try again."
+                } else {
+                    lastError = error.localizedDescription
+                }
             }
             loading = false
             updateIcon()
@@ -621,7 +652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
     }
 
-    @objc func refreshNow() { refresh() }
+    @objc func refreshNow() { refresh(manual: true) }
 
     @objc func toggleNotify(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "notifyBeforeCheap")
@@ -644,7 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     @objc func showSettings() {
         if settingsWindow == nil { buildSettingsWindow() }
         keyField?.stringValue = ""
-        keyStatus?.stringValue = apiKey == nil ? "No key saved" : "A key is saved in your Keychain"
+        setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
         notifyCheck?.state = notifyEnabled ? .on : .off
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -705,16 +736,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         notifyCheck = check
     }
 
+    func setKeyStatus(_ text: String, warning: Bool) {
+        keyStatus?.stringValue = text
+        keyStatus?.textColor = warning ? .systemRed : .secondaryLabelColor
+        // A failure message wraps onto a second line, so let the window grow to fit it.
+        settingsWindow?.setContentSize(settingsWindow?.contentView?.fittingSize ?? .zero)
+    }
+
     @objc func saveKey() {
         let value = (keyField?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        Keychain.save(value)
+        let status = Keychain.save(value)
+        // Use the key this session even if it couldn't be stored, but say so plainly.
         apiKey = value
         keyField?.stringValue = ""
-        keyStatus?.stringValue = "Key saved"
+        if status == errSecSuccess {
+            setKeyStatus("Key saved", warning: false)
+        } else {
+            setKeyStatus(
+                "Couldn't save to your Keychain: \(Keychain.message(status)). The key works until you quit.",
+                warning: true)
+        }
         snapshot = nil
         lastError = nil
-        refresh()
+        refresh(manual: true)
     }
 }
 
