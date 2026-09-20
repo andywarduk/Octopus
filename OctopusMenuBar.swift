@@ -96,23 +96,42 @@ func isCheap(_ s: Snapshot, now: Date) -> Bool {
     currentInterval(cheapIntervals(s, now: now), now: now) != nil
 }
 
-/// Fetch every 5 minutes, or every 30 seconds within 3 minutes either side of a rate switch.
-func fetchInterval(_ s: Snapshot?, now: Date) -> TimeInterval {
-    guard let s else { return 300 }
-    let window: TimeInterval = 3 * 60
-    // Look back one window so intervals that ended just now still count as a recent switch.
-    let nearSwitch = cheapIntervals(s, now: now.addingTimeInterval(-window)).contains {
-        abs($0.start.timeIntervalSince(now)) <= window || abs($0.end.timeIntervalSince(now)) <= window
+/// How far either side of a rate switch counts as "about to change".
+let switchWindow: TimeInterval = 3 * 60
+
+/// Fetch every 5 minutes, or every 30 seconds within `switchWindow` either side of a rate switch.
+/// Takes intervals computed with a `switchWindow` lookback, so a switch just gone still counts.
+func fetchInterval(_ recent: [Interval], now: Date) -> TimeInterval {
+    let nearSwitch = recent.contains {
+        abs($0.start.timeIntervalSince(now)) <= switchWindow || abs($0.end.timeIntervalSince(now)) <= switchWindow
     }
     return nearSwitch ? 30 : 300
 }
 
+/// DateFormatter is costly to build and a menu rebuild formats a dozen dates, so keep one per
+/// format and timezone. Formatting itself is thread-safe; the lock only guards the dictionary.
+private final class FormatterCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cache: [String: DateFormatter] = [:]
+
+    func formatter(_ format: String, _ tz: TimeZone) -> DateFormatter {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = "\(format)|\(tz.identifier)"
+        if let f = cache[key] { return f }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_GB")
+        f.timeZone = tz
+        f.dateFormat = format
+        cache[key] = f
+        return f
+    }
+}
+
+private let formatters = FormatterCache()
+
 func formatted(_ date: Date, _ format: String, _ tz: TimeZone) -> String {
-    let f = DateFormatter()
-    f.locale = Locale(identifier: "en_GB")
-    f.timeZone = tz
-    f.dateFormat = format
-    return f.string(from: date)
+    formatters.formatter(format, tz).string(from: date)
 }
 
 func dayLabel(_ date: Date, now: Date, _ tz: TimeZone) -> String {
@@ -474,6 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var keyField: NSSecureTextField?
     var keyStatus: NSTextField?
     var notifyCheck: NSButton?
+    var removeButton: NSButton?
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?
@@ -506,18 +526,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
     func tick() {
-        updateIcon()
-        checkUpcomingCheap()
         let now = Date()
+        // One pass per tick: everything below works from these. The lookback keeps intervals that
+        // ended moments ago, which fetchInterval needs to spot a switch that has just happened.
+        let recent = snapshot.map { cheapIntervals($0, now: now.addingTimeInterval(-switchWindow)) } ?? []
+        let current = recent.filter { $0.end > now }
+        updateIcon(intervals: current)
+        checkUpcomingCheap(intervals: current)
         // A small tolerance stops a tick landing just short of the interval from waiting a whole extra tick.
-        if now.timeIntervalSince(snapshot?.fetched ?? .distantPast) >= fetchInterval(snapshot, now: now) - 5 { refresh() }
+        if now.timeIntervalSince(snapshot?.fetched ?? .distantPast) >= fetchInterval(recent, now: now) - 5 { refresh() }
     }
 
     /// Alerts once when a cheap window (fixed or smart-charge) is about to start.
-    func checkUpcomingCheap() {
+    func checkUpcomingCheap(intervals: [Interval]) {
         guard notifyEnabled, let s = snapshot else { return }
         let now = Date()
-        let intervals = cheapIntervals(s, now: now)
         guard currentInterval(intervals, now: now) == nil, let next = intervals.first else { return }
         let lead = next.start.timeIntervalSince(now)
         guard lead > 0, lead <= Self.leadTime else { return }
@@ -602,12 +625,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
     }
 
-    func updateIcon() {
+    /// - Parameter intervals: this tick's cheap intervals, when the caller has them already.
+    func updateIcon(intervals: [Interval]? = nil) {
         let symbol: String
         var color: NSColor?
         var tip: String
         if let s = snapshot, lastError == nil || Date().timeIntervalSince(s.fetched) < 900 {
-            let cheap = isCheap(s, now: Date())
+            let now = Date()
+            let cheap = currentInterval(intervals ?? cheapIntervals(s, now: now), now: now) != nil
             symbol = cheap ? "bolt.fill" : "bolt"
             color = cheap ? .systemGreen : nil
             if !s.hasCheapRate {
@@ -715,6 +740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if settingsWindow == nil { buildSettingsWindow() }
         keyField?.stringValue = ""
         setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
+        removeButton?.isEnabled = apiKey != nil
         notifyCheck?.state = notifyEnabled ? .on : .off
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -730,7 +756,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         field.widthAnchor.constraint(equalToConstant: 260).isActive = true
         let save = NSButton(title: "Save", target: self, action: #selector(saveKey))
         save.keyEquivalent = "\r"
-        let keyRow = NSStackView(views: [field, save])
+        let remove = NSButton(title: "Remove", target: self, action: #selector(removeKey))
+        let keyRow = NSStackView(views: [field, save, remove])
         keyRow.spacing = 8
 
         let status = NSTextField(labelWithString: "")
@@ -773,6 +800,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         keyField = field
         keyStatus = status
         notifyCheck = check
+        removeButton = remove
+    }
+
+    @objc func removeKey() {
+        let confirm = NSAlert()
+        confirm.icon = makeAppIcon()
+        confirm.messageText = "Remove the saved API key?"
+        confirm.informativeText =
+            "The app will stop updating until you enter a key again. You can copy a new one from your Octopus account."
+        confirm.addButton(withTitle: "Remove")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        let status = Keychain.delete()
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            setKeyStatus("Couldn't remove it: \(Keychain.message(status))", warning: true)
+            return
+        }
+        apiKey = nil
+        snapshot = nil
+        lastError = "No API key set"
+        removeButton?.isEnabled = false
+        setKeyStatus("Key removed", warning: false)
+        updateIcon()
     }
 
     func setKeyStatus(_ text: String, warning: Bool) {
@@ -789,6 +840,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         // Use the key this session even if it couldn't be stored, but say so plainly.
         apiKey = value
         keyField?.stringValue = ""
+        removeButton?.isEnabled = true
         if status == errSecSuccess {
             setKeyStatus("Key saved", warning: false)
         } else {
