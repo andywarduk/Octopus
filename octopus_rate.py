@@ -42,6 +42,60 @@ def parse(ts):
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+def to_float(value):
+    """Decimal fields arrive as strings, and can be null."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def day_label(when, now_local):
+    delta = (when.date() - now_local.date()).days
+    return {0: "Today", 1: "Tomorrow", -1: "Yesterday"}.get(delta, f"{when:%a}")
+
+
+def stamp(when, now_local):
+    return f"{day_label(when, now_local)} {when:%H:%M}"
+
+
+def charging_status(status, now):
+    """Octopus doesn't report "plugged in", so infer charging from live power and smart-control state."""
+    state = status.get("currentState") or ""
+    # A lost connection explains anything else we might say, so it wins.
+    if state == "LOST_CONNECTION":
+        return "Lost connection to car"
+
+    power = status.get("activePower") or {}
+    power_at = parse(power["timestamp"]) if power.get("timestamp") else None
+    kw = to_float(power.get("value"))
+    fresh = power_at is not None and (now - power_at).total_seconds() < 20 * 60
+
+    # isSuspended means smart control is paused, not that charging stopped: a suspended car
+    # left plugged in still draws power. It says nothing when control isn't available.
+    paused = status.get("isSuspended") is True and state != "SMART_CONTROL_NOT_AVAILABLE"
+    annotated = lambda text: text + " · smart control paused" if paused else text
+
+    if fresh and kw is not None and kw > 0.05:
+        charging = f"Charging {kw:.1f} kW"
+        if state == "BOOSTING":
+            return charging + " · boost"
+        if state == "SMART_CONTROL_IN_PROGRESS":
+            return charging + " · smart charging"
+        return annotated(charging)
+    if state == "BOOSTING":
+        return "Boost charge requested"
+    if state == "SMART_CONTROL_IN_PROGRESS":
+        return "Smart charging scheduled"
+    if state == "SMART_CONTROL_NOT_AVAILABLE":
+        return "Not charging · smart control not available"
+    if state in ("SMART_CONTROL_CAPABLE", "SMART_CONTROL_OFF", "SETUP_COMPLETE", ""):
+        if fresh:
+            return annotated("Not charging")
+        return "Smart control paused" if paused else None
+    return annotated(state.replace("_", " ").capitalize())
+
+
 def in_window(t, start, end):
     return start <= t < end if start <= end else t >= start or t < end
 
@@ -135,34 +189,39 @@ if DEBUG:
         print(f"dispatch {d['start']} -> {d['end']}")
     print("now:", now_local.isoformat())
 
-active_dispatches = [d for d in dispatches if parse(d["start"]) <= now < parse(d["end"])]
-in_cheap_window = any(in_window(now_local.time(), a, b) for a, b in windows)
-cheap = bool(active_dispatches) or in_cheap_window
-
-print(f"Now: {'CHEAP' if cheap else 'PEAK'}  ({(cheap_rate if cheap else peak_rate):.2f}p/kWh)")
-if active_dispatches:
-    print("In a smart-charging dispatch window.")
-
-change = next_boundary(now_local, windows)
-if cheap:
-    if active_dispatches and not in_cheap_window:
-        change = max(parse(d["end"]) for d in active_dispatches).astimezone(tz)
-    print(f"Next change {change:%a %H:%M} -> {peak_rate:.2f}p/kWh")
+# A single-rate tariff has no cheap window, whatever the schedule says.
+if peak_rate - cheap_rate < 0.01:
+    print(f"Now: SINGLE RATE  ({peak_rate:.2f}p/kWh)")
+    print("This tariff has no cheap window.")
 else:
-    starts = [parse(d["start"]).astimezone(tz) for d in dispatches if parse(d["start"]) > now]
-    change = min([change, *starts])
-    print(f"Next change {change:%a %H:%M} -> {cheap_rate:.2f}p/kWh")
+    active_dispatches = [d for d in dispatches if parse(d["start"]) <= now < parse(d["end"])]
+    in_cheap_window = any(in_window(now_local.time(), a, b) for a, b in windows)
+    cheap = bool(active_dispatches) or in_cheap_window
+
+    print(f"Now: {'CHEAP' if cheap else 'PEAK'}  ({(cheap_rate if cheap else peak_rate):.2f}p/kWh)")
+    if active_dispatches:
+        print("In a smart-charging dispatch window.")
+
+    change = next_boundary(now_local, windows)
+    if cheap:
+        if active_dispatches and not in_cheap_window:
+            change = max(parse(d["end"]) for d in active_dispatches).astimezone(tz)
+        print(f"Next change {stamp(change, now_local)} -> {peak_rate:.2f}p/kWh")
+    else:
+        starts = [parse(d["start"]).astimezone(tz) for d in dispatches if parse(d["start"]) > now]
+        change = min([change, *starts])
+        print(f"Next change {stamp(change, now_local)} -> {cheap_rate:.2f}p/kWh")
 
 # Car charge level. Kept separate so a failure here never hides the rate result above.
 DEVICES_QUERY = """query($a:String!){devices(accountNumber:$a){
   __typename id name
   ... on SmartFlexVehicle{
     make model
-    status{... on SmartFlexVehicleStatus{currentState stateOfCharge{value timestamp}}}
+    status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
     chargingPreferences{weekdayTargetSoc weekendTargetSoc}
   }
   ... on SmartFlexChargePoint{
-    status{... on SmartFlexChargePointStatus{currentState stateOfCharge{value timestamp}}}
+    status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
   }
 }}"""
 try:
@@ -177,18 +236,24 @@ if DEBUG:
 weekend = now_local.weekday() >= 5
 for dev in devices:
     status = dev.get("status") or {}
-    soc = status.get("stateOfCharge")
-    if not soc:
+    soc = status.get("stateOfCharge") or {}
+    label = (
+        " ".join(filter(None, [dev.get("make"), dev.get("model")]))
+        or dev.get("name")
+        or dev["__typename"]
+    )
+    value = to_float(soc.get("value"))
+    if value is None:
+        print(f"{label}: no charge level reported")
         continue
-    label = " ".join(filter(None, [dev.get("make"), dev.get("model")])) or dev.get("name") or dev["__typename"]
-    line = f"{label}: {float(soc['value']):.0f}%"
+    line = f"{label}: {value:.0f}%"
     prefs = dev.get("chargingPreferences")
     if prefs:
         target = prefs["weekendTargetSoc" if weekend else "weekdayTargetSoc"]
         line += f" (target {target}%)"
-    if status.get("currentState"):
-        line += f", {str(status['currentState']).replace('_', ' ').lower()}"
-    line += f"  as of {parse(soc['timestamp']).astimezone(tz):%H:%M}"
     print(line)
-if devices and not any((d.get("status") or {}).get("stateOfCharge") for d in devices):
-    print("Car: connected, but no charge level is being reported.")
+    state = charging_status(status, now)
+    if state:
+        print(f"    {state}")
+    if soc.get("timestamp"):
+        print(f"    Charge level as of {stamp(parse(soc['timestamp']).astimezone(tz), now_local)}")

@@ -5,7 +5,7 @@ Tools for checking your Octopus Energy rate (built around Intelligent Octopus Go
 
 - **`OctopusMenuBar.swift`**: a macOS menu bar app that shows whether you're on the cheap or
   standard rate, your car's charge level and charging status, and upcoming cheap windows.
-- **`octopus_rate.py`**: a command-line version that prints the current rate, next change and car charge.
+- **`octopus_rate.py`**: a command-line version showing the same rate, charge level and charging status.
 
 ## Menu bar app
 
@@ -61,8 +61,10 @@ and prints something like:
 
 ```
 Now: PEAK  (28.93p/kWh)
-Next change Sat 23:30 -> 6.57p/kWh
-Mini Cooper: 62% (target 100%), smart control not available  as of 15:08
+Next change Today 23:30 -> 6.57p/kWh
+Mini Cooper: 62% (target 100%)
+    Not charging · smart control not available
+    Charge level as of Today 15:08
 ```
 
 Set `DEBUG=1` to also print the raw rates, tariff schedule, dispatches and devices.

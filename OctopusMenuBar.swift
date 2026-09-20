@@ -35,6 +35,9 @@ struct Snapshot {
     var cars: [Car]
     var tz: TimeZone
     var fetched: Date
+
+    /// A single-rate tariff has no cheap window, whatever the schedule says.
+    var hasCheapRate: Bool { peakRate - cheapRate >= 0.01 }
 }
 
 enum Line {
@@ -53,6 +56,7 @@ func calendar(_ tz: TimeZone) -> Calendar {
 
 /// Cheap intervals that haven't ended yet and start within the next 48 hours, merged and sorted.
 func cheapIntervals(_ s: Snapshot, now: Date) -> [Interval] {
+    guard s.hasCheapRate else { return [] }
     let cal = calendar(s.tz)
     let today = cal.startOfDay(for: now)
     var all: [Interval] = []
@@ -169,7 +173,10 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
     let active = currentInterval(intervals, now: now)
     var lines: [Line] = []
 
-    if let active {
+    if !s.hasCheapRate {
+        lines.append(.header("Single rate · \(pence(s.peakRate))"))
+        lines.append(.text("This tariff has no cheap window"))
+    } else if let active {
         lines.append(.header("Cheap rate now · \(pence(s.cheapRate))"))
         lines.append(.text("Back to standard at \(stamp(active.end, now: now, tz)) (\(pence(s.peakRate)))"))
     } else {
@@ -192,6 +199,12 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
         } else {
             lines.append(.text("\(car.name): no charge level reported"))
         }
+    }
+
+    guard s.hasCheapRate else {
+        lines.append(.separator)
+        lines.append(.text("Updated \(formatted(s.fetched, "HH:mm", tz))"))
+        return lines
     }
 
     lines.append(.separator)
@@ -464,8 +477,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?
-    /// Cheap-interval start times already announced, so each one alerts once.
-    var notified = Set<Date>()
+    /// When the last "cheap rate soon" alert went out, for the cooldown below.
+    var lastAlertAt: Date?
+    /// Dispatches get re-planned a few minutes either way, which would otherwise alert again.
+    static let alertCooldown: TimeInterval = 30 * 60
     /// Consecutive failed fetches. Automatic refreshing stops at maxFailures so a bad key or a
     /// long outage can't hammer the API; "Refresh now" clears it.
     var failures = 0
@@ -505,9 +520,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let intervals = cheapIntervals(s, now: now)
         guard currentInterval(intervals, now: now) == nil, let next = intervals.first else { return }
         let lead = next.start.timeIntervalSince(now)
-        guard lead > 0, lead <= Self.leadTime, !notified.contains(next.start) else { return }
-        notified = notified.filter { $0 > now }
-        notified.insert(next.start)
+        guard lead > 0, lead <= Self.leadTime else { return }
+        if let last = lastAlertAt, now.timeIntervalSince(last) < Self.alertCooldown { return }
+        lastAlertAt = now
         let mins = max(1, Int((lead / 60).rounded()))
         let body = "From \(formatted(next.start, "HH:mm", s.tz)): \(pence(s.cheapRate)) (now \(pence(s.peakRate)))"
         Task { await post(title: "Cheap rate in \(mins) min", body: body) }
@@ -595,7 +610,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             let cheap = isCheap(s, now: Date())
             symbol = cheap ? "bolt.fill" : "bolt"
             color = cheap ? .systemGreen : nil
-            tip = cheap ? "Cheap rate: \(pence(s.cheapRate))" : "Standard rate: \(pence(s.peakRate))"
+            if !s.hasCheapRate {
+                tip = "Single rate: \(pence(s.peakRate))"
+            } else {
+                tip = cheap ? "Cheap rate: \(pence(s.cheapRate))" : "Standard rate: \(pence(s.peakRate))"
+            }
         } else {
             symbol = "exclamationmark.triangle"
             tip = lastError ?? "Loading…"
@@ -811,9 +830,15 @@ func selfTest() {
         print("  \(label): \(chargingStatus(car, now: date("2026-09-19T15:13:00Z")) ?? "(no line)")")
     }
 
-    for (label, now) in [("Sat 16:13 BST", "2026-09-19T15:13:00Z"), ("Sun 02:00 BST", "2026-09-20T01:00:00Z")] {
-        print("--- \(label): cheap=\(isCheap(snap, now: date(now)))")
-        for line in menuLines(snap, now: date(now)) {
+    var flat = snap
+    flat.cheapRate = flat.peakRate
+    for (label, now, s) in [
+        ("Sat 16:13 BST", "2026-09-19T15:13:00Z", snap),
+        ("Sun 02:00 BST", "2026-09-20T01:00:00Z", snap),
+        ("flat tariff", "2026-09-20T01:00:00Z", flat),
+    ] {
+        print("--- \(label): cheap=\(isCheap(s, now: date(now)))")
+        for line in menuLines(s, now: date(now)) {
             switch line {
             case .separator: print("  ------")
             case .header(let t): print("  [\(t)]")
