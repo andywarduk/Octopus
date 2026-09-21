@@ -23,15 +23,18 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
     let dir = CommandLine.arguments[i + 1]
     MainActor.assumeIsolated {
         let series = sampleUsageWeek(tz: .current)
-        for (name, unit, scale, dark) in [
-            ("kwh-light", UsageUnit.kwh, Granularity.day, false),
-            ("money-dark", .money, .day, true),
-            ("halfhour-light", .kwh, .halfHour, false),
-            ("halfhour-dark", .kwh, .halfHour, true),
+        for (name, unit, scale, dark, hover) in [
+            ("kwh-light", UsageUnit.kwh, Granularity.day, false, Int?.none),
+            ("money-dark", .money, .day, true, nil),
+            ("halfhour-light", .kwh, .halfHour, false, nil),
+            ("halfhour-dark", .kwh, .halfHour, true, nil),
+            ("tooltip-day", .kwh, .day, false, 4),
+            ("tooltip-halfhour", .kwh, .halfHour, false, 4 * 48 + 27),
+            ("tooltip-money", .money, .day, true, 4),
         ] {
             renderUsageChart(
                 periods: series.periods(scale), unit: unit, granularity: scale, dark: dark,
-                size: CGSize(width: 604, height: 300), to: "\(dir)/chart-\(name).png")
+                size: CGSize(width: 604, height: 300), hover: hover, to: "\(dir)/chart-\(name).png")
         }
         let hairlines = countHairlines(
             periods: series.periods(.halfHour), dark: false, size: CGSize(width: 604, height: 300))

@@ -128,7 +128,12 @@ extension AppDelegate {
         let scale = usageGranularity == .day
             ? "\(periods.count) days · each bar is one day"
             : "\(periods.count) half hours · each bar is 30 minutes of energy, not power"
-        var text = "\(scale) · \(formatUsage(total, unit)) total"
+        var text = "\(scale) · \(formatUsage(total, unit, withUnit: true)) total"
+        let pending = periods.filter { !$0.hasData }.count
+        if pending > 0 {
+            let noun = usageGranularity == .day ? "day" : "half hour"
+            text += " · \(pending) \(noun)\(pending == 1 ? "" : "s") not published yet"
+        }
         if standing > 0 {
             text += " · standing charge \(formatUsage(standing, .money)) not shown"
         }

@@ -14,38 +14,53 @@ func hexColor(_ hex: String) -> NSColor {
 }
 
 enum SeriesColor {
-    // Categorical slots 1, 2, 3 in fixed order: blue, orange, aqua.
+    // Categorical slots 1 and 3 for the two prices; slot 2 marks a smart charge, which sits
+    // under the axis rather than in the stack because it isn't a separate price.
     static let light: [RateBand: NSColor] = [
-        .cheap: hexColor("#2a78d6"), .smartCharge: hexColor("#eb6834"), .standard: hexColor("#1baf7a"),
+        .cheap: hexColor("#2a78d6"), .standard: hexColor("#1baf7a"),
     ]
     static let dark: [RateBand: NSColor] = [
-        .cheap: hexColor("#3987e5"), .smartCharge: hexColor("#d95926"), .standard: hexColor("#199e70"),
+        .cheap: hexColor("#3987e5"), .standard: hexColor("#199e70"),
     ]
+    static func smart(dark isDark: Bool) -> NSColor {
+        isDark ? hexColor("#d95926") : hexColor("#eb6834")
+    }
 
     static func of(_ band: RateBand, dark isDark: Bool) -> NSColor {
         (isDark ? dark : light)[band] ?? .systemGray
     }
 }
 
-/// Rounds an axis maximum up to a round number. The ladder is fine enough that a column never
-/// fills much less than about three quarters of the plot, and every step still quarters cleanly.
-func niceMax(_ value: Double) -> Double {
-    guard value > 0 else { return 1 }
-    let magnitude = pow(10, (log10(value)).rounded(.down))
-    let normalised = value / magnitude
-    let step = [1.0, 1.5, 2, 3, 4, 5, 6, 8, 10].first { normalised <= $0 } ?? 10
-    return step * magnitude
+/// Picks a round gridline step first, then the axis maximum as a whole number of those steps.
+/// Choosing the maximum first and quartering it gives ticks like 1.25 / 2.5 / 3.75.
+/// Steps ascend, so the first one needing six lines or fewer is the finest that stays readable.
+func axisScale(_ maxValue: Double) -> (max: Double, step: Double) {
+    guard maxValue > 0, maxValue.isFinite else { return (1, 1) }
+    for power in -4...12 {
+        for base in [1.0, 2, 2.5, 5] {
+            let step = base * pow(10, Double(power))
+            let divisions = (maxValue / step).rounded(.up)
+            if divisions <= 6 { return (divisions * step, step) }
+        }
+    }
+    return (maxValue, maxValue)
 }
 
-func formatUsage(_ value: Double, _ unit: UsageUnit, short: Bool = false) -> String {
+/// - Parameter withUnit: appends "kWh". Money needs nothing: the £ already says what it is.
+func formatUsage(_ value: Double, _ unit: UsageUnit, short: Bool = false, withUnit: Bool = false) -> String {
     switch unit {
-    case .kwh: return short ? String(format: "%g", value) : String(format: "%.1f", value)
+    case .kwh:
+        let number = short ? String(format: "%g", value) : String(format: "%.1f", value)
+        return withUnit ? number + " kWh" : number
     case .money:
         let pounds = value / 100
         // Axis ticks stay in pounds throughout, so the scale reads consistently from zero up.
         return String(format: short ? "£%g" : "£%.2f", pounds)
     }
 }
+
+/// Space under the plot for the smart-charge markers, the boundary ticks and the day labels.
+let plotBottomInset: CGFloat = 30
 
 @MainActor
 final class UsageChartView: NSView {
@@ -87,6 +102,12 @@ final class UsageChartView: NSView {
         }
     }
 
+    /// Forces the hover state, so the offscreen renderer can show a tooltip.
+    func previewHover(_ index: Int?) {
+        hoverIndex = index
+        needsDisplay = true
+    }
+
     override func mouseExited(with event: NSEvent) {
         hoverIndex = nil
         needsDisplay = true
@@ -97,14 +118,18 @@ final class UsageChartView: NSView {
         dirtyRect.fill()
         guard !periods.isEmpty else { return }
 
-        let left: CGFloat = 52, right: CGFloat = 14, top: CGFloat = 30, bottom: CGFloat = 26
+        // Top leaves room for the legend plus a cap label above a column that nearly fills the plot.
+        let left: CGFloat = 52, right: CGFloat = 14, top: CGFloat = 46
+        let bottom = plotBottomInset
         let plot = CGRect(
             x: left, y: bottom, width: max(10, bounds.width - left - right),
             height: max(10, bounds.height - top - bottom))
         let maxTotal = periods.map { $0.total(unit) }.max() ?? 1
-        let axisMax = niceMax(maxTotal)
+        let (axisMax, axisStep) = axisScale(maxTotal)
 
-        drawGrid(plot: plot, axisMax: axisMax)
+        slotWidth = plot.width / CGFloat(periods.count)
+        drawGrid(plot: plot, axisMax: axisMax, step: axisStep)
+        drawTimeGrid(plot: plot)
         drawColumns(plot: plot, axisMax: axisMax)
         drawLegend()
         plotRect = plot
@@ -131,11 +156,13 @@ final class UsageChartView: NSView {
         string.draw(at: origin)
     }
 
-    private func drawGrid(plot: CGRect, axisMax: Double) {
+    private func drawGrid(plot: CGRect, axisMax: Double, step: Double) {
         // Recessive: hairlines and muted ink, so the data stays in front.
         NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
-        for step in 0...4 {
-            let fraction = Double(step) / 4
+        let lines = max(1, Int((axisMax / step).rounded()))
+        for index in 0...lines {
+            let value = step * Double(index)
+            let fraction = value / axisMax
             let y = plot.minY + plot.height * fraction
             let line = NSBezierPath()
             line.move(to: CGPoint(x: plot.minX, y: y.rounded() + 0.5))
@@ -143,14 +170,33 @@ final class UsageChartView: NSView {
             line.lineWidth = 1
             line.stroke()
             label(
-                formatUsage(axisMax * fraction, unit, short: true),
+                formatUsage(value, unit, short: true),
                 at: CGPoint(x: plot.minX - 8, y: y - 6), size: 10, color: .tertiaryLabelColor, align: .right)
         }
     }
 
+    /// Vertical rules for half-hourly bars: strong at midnight, faint at noon. Drawn before the
+    /// columns so it stays behind the data.
+    private func drawTimeGrid(plot: CGRect) {
+        guard granularity == .halfHour else { return }
+        let cal = calendar(tz)
+        for (index, period) in periods.enumerated() where index > 0 {
+            let parts = cal.dateComponents([.hour, .minute], from: period.start)
+            guard parts.minute == 0, parts.hour == 0 || parts.hour == 12 else { continue }
+            let isMidnight = parts.hour == 0
+            // Recessive: about the weight of the horizontal rules, with noon fainter still.
+            NSColor.separatorColor.withAlphaComponent(isMidnight ? 0.45 : 0.16).setStroke()
+            let line = NSBezierPath()
+            let x = (plot.minX + slotWidth * CGFloat(index)).rounded() + 0.5
+            line.move(to: CGPoint(x: x, y: plot.minY))
+            line.line(to: CGPoint(x: x, y: plot.maxY))
+            line.lineWidth = 1
+            line.stroke()
+        }
+    }
+
     private func drawColumns(plot: CGRect, axisMax: Double) {
-        let slot = plot.width / CGFloat(periods.count)
-        slotWidth = slot
+        let slot = slotWidth
         // Daily columns sit apart; half-hourly bars are a contiguous strip, where a gap would
         // cost more width than it buys in separation.
         let barGap: CGFloat = granularity == .day || slot < 6 ? 0 : 2
@@ -175,11 +221,22 @@ final class UsageChartView: NSView {
             }
 
             if hoverIndex == index {
+                // Pad by a fraction of the bar, not a fixed amount: 3px either side of a 1.6px
+                // half-hourly bar makes the highlight wider than the thing it marks.
+                let pad = min(3, max(0.5, width / 3))
                 NSColor.secondaryLabelColor.withAlphaComponent(0.09).setFill()
                 NSBezierPath(
-                    roundedRect: CGRect(x: left - 3, y: plot.minY - 3, width: width + 6, height: plot.height + 6),
-                    xRadius: 4, yRadius: 4
+                    roundedRect: CGRect(
+                        x: left - pad, y: plot.minY - 3, width: width + pad * 2, height: plot.height + 6),
+                    xRadius: min(4, pad * 2), yRadius: min(4, pad * 2)
                 ).fill()
+            }
+
+            if !period.hasData {
+                // A dash on the baseline: clearly not a zero-height bar.
+                NSColor.tertiaryLabelColor.withAlphaComponent(0.5).setFill()
+                NSBezierPath(rect: CGRect(x: left, y: plot.minY, width: width, height: 2)).fill()
+                continue
             }
 
             let bands = RateBand.allCases.filter { period.value($0, unit) > 0 }
@@ -198,6 +255,11 @@ final class UsageChartView: NSView {
                     ? roundedTop(rect, radius: 4) : NSBezierPath(rect: rect)
                 path.fill()
                 y += full
+            }
+
+            if period.smartCharge {
+                SeriesColor.smart(dark: isDark).setFill()
+                NSBezierPath(rect: CGRect(x: left, y: plot.minY - 6, width: width, height: 3)).fill()
             }
 
             // Columns carry their value on the cap; the per-band numbers live in the legend
@@ -222,7 +284,7 @@ final class UsageChartView: NSView {
             for (index, period) in periods.enumerated() {
                 label(
                     dayFormat.string(from: period.start),
-                    at: CGPoint(x: plot.minX + slot * (CGFloat(index) + 0.5), y: plot.minY - 16), size: 10,
+                    at: CGPoint(x: plot.minX + slot * (CGFloat(index) + 0.5), y: plot.minY - 20), size: 10,
                     color: .secondaryLabelColor, align: .centre)
             }
             return
@@ -239,16 +301,8 @@ final class UsageChartView: NSView {
             if to - from > 26 {
                 label(
                     dayFormat.string(from: periods[runStart].start),
-                    at: CGPoint(x: (from + to) / 2, y: plot.minY - 16), size: 10,
+                    at: CGPoint(x: (from + to) / 2, y: plot.minY - 20), size: 10,
                     color: .secondaryLabelColor, align: .centre)
-            }
-            if index < periods.count {
-                NSColor.separatorColor.withAlphaComponent(0.8).setStroke()
-                let tick = NSBezierPath()
-                tick.move(to: CGPoint(x: to.rounded() + 0.5, y: plot.minY - 4))
-                tick.line(to: CGPoint(x: to.rounded() + 0.5, y: plot.minY))
-                tick.lineWidth = 1
-                tick.stroke()
             }
             runStart = index
         }
@@ -280,26 +334,40 @@ final class UsageChartView: NSView {
             guard total > 0 else { continue }
             SeriesColor.of(band, dark: isDark).setFill()
             NSBezierPath(roundedRect: CGRect(x: x, y: y + 1, width: 9, height: 9), xRadius: 2, yRadius: 2).fill()
-            let text = "\(band.rawValue) \(formatUsage(total, unit))"
+            let text = "\(band.rawValue) \(formatUsage(total, unit, withUnit: true))"
             label(text, at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
             x += 14 + text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width + 16
         }
+        guard periods.contains(where: \.smartCharge) else { return }
+        SeriesColor.smart(dark: isDark).setFill()
+        NSBezierPath(rect: CGRect(x: x, y: y + 4, width: 9, height: 3)).fill()
+        label("Smart charge", at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
     }
 
     private func drawTooltip(for index: Int, plot: CGRect) {
         let period = periods[index]
         let heading: String
         if granularity == .day {
-            heading = "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit), unit))"
+            heading = period.hasData
+                ? "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit), unit, withUnit: true))"
+                : formatted(period.start, "EEE d MMM", tz)
         } else {
             heading = "\(formatted(period.start, "EEE d MMM HH:mm", tz))–\(formatted(period.end, "HH:mm", tz))"
-                + "  ·  \(formatUsage(period.total(unit), unit))"
+                + "  ·  \(formatUsage(period.total(unit), unit, withUnit: true))"
         }
         var lines = [heading]
-        for band in RateBand.allCases where period.value(band, unit) > 0 {
-            lines.append("\(band.rawValue): \(formatUsage(period.value(band, unit), unit))")
+        if !period.hasData {
+            lines.append("No data yet — Octopus publishes about two days behind")
         }
-        if period.total(unit) == 0 { lines.append("No usage") }
+        for band in RateBand.allCases where period.value(band, unit) > 0 {
+            var line = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true))"
+            if let price = period.price(band) { line += String(format: " @ %.2fp", price) }
+            lines.append(line)
+        }
+        if period.smartCharge {
+            lines.append("Smart charge ran in this period")
+        }
+        if period.hasData, period.total(unit) == 0 { lines.append("No usage") }
         if unit == .money, granularity == .day, period.standingPence > 0 {
             lines.append("Standing: \(formatUsage(period.standingPence, .money))")
         }
@@ -308,9 +376,14 @@ final class UsageChartView: NSView {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
         let width = lines.map { $0.size(withAttributes: attributes).width }.max() ?? 80
         let height = CGFloat(lines.count) * 15 + 10
+        // Sit beside the column, never over it: centring the box hides the column's own cap label.
         let anchorX = plot.minX + slotWidth * (CGFloat(index) + 0.5)
-        var box = CGRect(x: anchorX - (width + 16) / 2, y: plot.maxY - height, width: width + 16, height: height)
-        box.origin.x = min(max(box.minX, 4), bounds.width - box.width - 4)
+        let boxWidth = width + 16
+        let gap = max(8, slotWidth / 2 + 8)
+        var originX = anchorX + gap
+        if originX + boxWidth > bounds.width - 4 { originX = anchorX - gap - boxWidth }
+        originX = min(max(originX, 4), bounds.width - boxWidth - 4)
+        let box = CGRect(x: originX, y: plot.maxY - height, width: boxWidth, height: height)
 
         NSColor.windowBackgroundColor.withAlphaComponent(0.97).setFill()
         let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
@@ -329,13 +402,14 @@ final class UsageChartView: NSView {
 @MainActor
 func renderUsageChart(
     periods: [UsagePeriod], unit: UsageUnit, granularity: Granularity, dark: Bool, size: CGSize,
-    to path: String
+    hover: Int? = nil, to path: String
 ) {
     let view = UsageChartView(frame: CGRect(origin: .zero, size: size))
     view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     view.periods = periods
     view.granularity = granularity
     view.unit = unit
+    view.previewHover(hover)
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
     // Paint the chart surface first; the view itself draws on a clear background.
     NSGraphicsContext.saveGraphicsState()
@@ -379,6 +453,8 @@ func sampleUsageWeek(tz: TimeZone) -> UsageSeries {
         let start = weekStart.addingTimeInterval(Double(slot) * 1800)
         let hour = Double(cal.component(.hour, from: start)) + Double(cal.component(.minute, from: start)) / 60
         let day = slot / 48
+        // Octopus publishes about two days behind, so the tail of the week has nothing at all.
+        guard day < 5 || (day == 5 && hour < 1) else { continue }
         standing.append((start, 1.03))
         guard hour < 9 || hour >= 11 || day != 3 else { continue }  // a gap with no readings
 
@@ -392,11 +468,13 @@ func sampleUsageWeek(tz: TimeZone) -> UsageSeries {
         let base = Double.random(in: 0.08...0.32, using: &generator)
         var entries: [(String, Double, Double)] = []
         if charging {
-            entries.append(("CONSUMPTION_CHARGE_ECO7_NIGHT_H", 6.89997, perHalfHour + base))
+            // Mirrors the real data: a fixed slice goes to the EV bucket, the remainder to the
+            // household bucket at the same off-peak price.
+            entries.append(("CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H", 6.89997, 2.611))
+            entries.append(("CONSUMPTION_CHARGE_ECO7_NIGHT_H", 6.89997, perHalfHour - 2.611 + base))
         } else if dispatch {
-            entries.append(("CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H", 6.89997, perHalfHour))
-            // The house is still on the standard rate while the car charges on a dispatch.
-            entries.append(("CONSUMPTION_CHARGE_ECO7_DAY_H", 30.37136, base))
+            entries.append(("CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H", 6.89997, 2.611))
+            entries.append(("CONSUMPTION_CHARGE_ECO7_NIGHT_H", 6.89997, perHalfHour - 2.611 + base))
         } else if overnight {
             entries.append(("CONSUMPTION_CHARGE_ECO7_NIGHT_H", 6.89997, base))
         } else {
@@ -406,7 +484,9 @@ func sampleUsageWeek(tz: TimeZone) -> UsageSeries {
             buckets.append(UsageBucket(start: start, label: label, kwh: kwh, pence: kwh * price, pricePerUnit: price))
         }
     }
-    return UsageSeries(buckets: buckets, standing: standing, tz: tz)
+    return UsageSeries(
+        buckets: buckets, standing: standing, tz: tz, from: weekStart,
+        to: weekStart.addingTimeInterval(7 * 86400))
 }
 
 /// Counts one-pixel background slivers flanked by bar colour — the hairlines that appear when
@@ -445,9 +525,19 @@ func countHairlines(periods: [UsagePeriod], dark: Bool, size: CGSize) -> Int {
     // blended pixel here is a seam between neighbours rather than the top of a short bar.
     var hairlines = 0
     var columns: Set<Int> = []
-    let baselineY = Int(size.height) - 26
+    // Must match the bottom inset in draw(), or the scan lands on the smart-charge markers.
+    let baselineY = Int(size.height) - Int(plotBottomInset)
+    // Skip slots with no data: their "not published" dash is a blend by design, not a seam.
+    let plotMinX = 52.0
+    let slot = (size.width - plotMinX - 14) / CGFloat(max(1, periods.count))
+    func hasData(atX x: Int) -> Bool {
+        let index = Int((CGFloat(x) - plotMinX) / slot)
+        guard index >= 0, index < periods.count else { return false }
+        return periods[index].hasData
+    }
+
     for y in (baselineY - 2)...(baselineY - 1) {
-        for x in 60..<(Int(size.width) - 20) where isBlend(x, y) {
+        for x in 60..<(Int(size.width) - 20) where hasData(atX: x) && isBlend(x, y) {
             hairlines += 1
             columns.insert(x)
         }

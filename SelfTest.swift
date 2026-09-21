@@ -46,18 +46,40 @@ func selfTest() {
     for day in aggregateUsage(buckets, standing: [(midnight, 1.03)], tz: tzLondon, by: .day) {
         let parts = RateBand.allCases
             .filter { day.value($0, .kwh) > 0 }
-            .map { "\($0.rawValue) \(formatUsage(day.value($0, .kwh), .kwh))kWh/\(formatUsage(day.value($0, .money), .money))" }
-        print("  \(formatted(day.start, "EEE d MMM", tzLondon)): \(parts.joined(separator: ", "))")
+            .map { band -> String in
+                let price = day.price(band).map { String(format: " @ %.2fp", $0) } ?? ""
+                return "\(band.rawValue) \(formatUsage(day.value(band, .kwh), .kwh))kWh\(price)"
+            }
+        print("  \(formatted(day.start, "EEE d MMM", tzLondon)): \(parts.joined(separator: ", "))"
+            + (day.smartCharge ? "  [smart charge]" : ""))
     }
     // A single-rate tariff must not produce a cheap band at all.
     let flatBuckets = buckets.map { UsageBucket(start: $0.start, label: $0.label, kwh: $0.kwh, pence: $0.pence, pricePerUnit: 30.37136) }
     print("  flat tariff threshold: \(priceThreshold(flatBuckets).map { "\($0)" } ?? "none")")
     print("  flat tariff bands: \(Set(flatBuckets.map { band(for: $0, threshold: priceThreshold(flatBuckets)).rawValue }).sorted())")
     for slot in aggregateUsage(buckets, standing: [], tz: tzLondon, by: .halfHour) {
-        let parts = RateBand.allCases.filter { slot.value($0, .kwh) > 0 }.map(\.rawValue)
-        print("  half hour \(formatted(slot.start, "HH:mm", tzLondon))–\(formatted(slot.end, "HH:mm", tzLondon)): \(parts.joined(separator: " + "))")
+        let parts = RateBand.allCases.filter { slot.value($0, .kwh) > 0 }
+            .map { "\($0.rawValue) \(formatUsage(slot.value($0, .kwh), .kwh))kWh" }
+        print("  half hour \(formatted(slot.start, "HH:mm", tzLondon))–\(formatted(slot.end, "HH:mm", tzLondon)): "
+            + parts.joined(separator: " + ") + (slot.smartCharge ? "  [smart charge]" : ""))
     }
-    print("  niceMax: 39.4 -> \(niceMax(39.4)), 2.5 -> \(niceMax(2.5)), 417 -> \(niceMax(417)), 0 -> \(niceMax(0))")
+    // A day the API returned nothing for must still get a column.
+    let dayOne = date("2026-09-17T23:00:00Z")   // 00:00 BST on the 18th
+    let dayFour = date("2026-09-20T23:00:00Z")  // 00:00 BST on the 21st
+    let padded = aggregateUsage(
+        buckets, standing: [], tz: tzLondon, by: .day, window: (dayOne, dayFour))
+    print("  window 18–20 Sep with data only on the 19th -> \(padded.count) columns:")
+    for day in padded {
+        let state = day.hasData ? formatUsage(day.total(.kwh), .kwh, withUnit: true) : "no data published"
+        print("    \(formatted(day.start, "EEE d MMM", tzLondon)): \(state)")
+    }
+    print("  axis scale (max, step, ticks):")
+    for value in [3.9, 2.5, 5.0, 7.4, 39.4, 59.3, 417.0, 0.3, 0.0] {
+        let (top, step) = axisScale(value)
+        let ticks = stride(from: 0.0, through: top + step / 2, by: step)
+            .map { String(format: "%g", $0) }
+        print("    \(value) -> max \(String(format: "%g", top)) step \(String(format: "%g", step)): \(ticks.joined(separator: ", "))")
+    }
 
     var flat = snap
     flat.cheapRate = flat.peakRate

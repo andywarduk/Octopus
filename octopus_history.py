@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Show which half hours you were actually billed at the cheap rate.
+"""Show which half hours you were actually billed at the off-peak rate.
 
-Octopus has no "past cheap periods" endpoint, so this reconstructs them from the half-hourly
+Octopus has no "past off-peak periods" endpoint, so this reconstructs them from the half-hourly
 measurements on your property: each one carries the unit rate you were charged. That catches
 smart-charge dispatches outside the fixed window as well as the window itself.
+
+Periods are grouped by price, which is real. The tariff's per-device buckets are not: Octopus
+allocates a fixed amount to the EV bucket and the rest of the car's draw lands in the household
+bucket at the same price, so a dispatch is marked rather than split out.
 
 Usage:
   OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py [options]
@@ -163,7 +167,7 @@ def classify(rows):
     if not rates:
         return None, None, None
     low, high = rates[0], rates[-1]
-    # A tariff with one rate has no cheap window; 20% apart is well beyond rounding noise.
+    # A tariff with one rate has no off-peak window; 20% apart is well beyond rounding noise.
     if high - low < max(1.0, low * 0.2):
         return None, low, high
     return (low + high) / 2, low, high
@@ -190,7 +194,7 @@ def runs_of_cheap(day_rows, threshold):
 
 
 def strip(day_rows, threshold, tz):
-    """One character per half hour, midnight to midnight."""
+    """One character per half hour, midnight to midnight. '·' means nothing was published."""
     slots = ["·"] * 48
     for row in day_rows:
         local = row["start"].astimezone(tz)
@@ -198,9 +202,10 @@ def strip(day_rows, threshold, tz):
         if not 0 <= index < 48:
             continue
         if row["rate"] is None:
-            slots[index] = "·"
+            slots[index] = "░"  # published, but no usage to price
         elif threshold and row["rate"] < threshold:
-            # Distinguish a smart-charge dispatch from the tariff's own overnight window.
+            # A dispatch is marked, not split out: the per-device buckets are a billing
+            # allocation, not a measurement of what the car drew.
             slots[index] = "▓" if any("EV_DEVICE" in b for b in row["buckets"]) else "█"
         else:
             slots[index] = "▒"
@@ -272,23 +277,30 @@ def main():
     if threshold is None and low is None:
         print("No unit rates came back, so cheap periods can't be identified. Try --debug.")
     elif threshold is None:
-        print(f"Only one rate seen ({low:.2f}p–{high:.2f}p), so there is no cheap window to show.")
+        print(f"Only one rate seen ({low:.2f}p–{high:.2f}p), so there is no off-peak window to show.")
     else:
-        print(f"Cheap {low:.2f}p · standard {high:.2f}p · counting anything under {threshold:.2f}p as cheap")
+        print(f"Off-peak {low:.2f}p · standard {high:.2f}p · counting anything under {threshold:.2f}p as off-peak")
     print("Costs include VAT and exclude the standing charge, which is shown per day.\n")
 
     by_day = {}
     for row in rows:
         by_day.setdefault(row["start"].astimezone(tz).date(), []).append(row)
 
+    # Every requested day gets a line, so a day Octopus hasn't published yet is visible as such
+    # rather than silently missing. It runs roughly two days behind.
+    wanted = [day.date() for day in days]
+
     if threshold is not None:
         print("        " + "".join(f"{hour:<4}" for hour in range(0, 24, 2)))
-        for date in sorted(by_day):
-            print(f"{date:%a %d}  " + strip(by_day[date], threshold, tz))
-        print("        █ cheap   ▓ smart charge   ▒ standard   · no usage\n")
+        for date in wanted:
+            print(f"{date:%a %d}  " + strip(by_day.get(date, []), threshold, tz))
+        print("        █ off-peak   ▓ off-peak, smart charge   ▒ standard   ░ no usage   · not published\n")
 
-    for date in sorted(by_day):
-        day_rows = by_day[date]
+    for date in wanted:
+        day_rows = by_day.get(date, [])
+        if not day_rows:
+            print(f"{date:%a %d %b}   not published yet")
+            continue
         kwh = sum(r["kwh"] or 0 for r in day_rows)
         pence = sum(r["pence"] or 0 for r in day_rows)
         standing = sum(r["standing"] or 0 for r in day_rows)
@@ -303,16 +315,18 @@ def main():
             rate = period["pence"] / period["kwh"] if period["kwh"] else 0
             smart = " (smart charge)" if any("EV_DEVICE" in b for b in period["buckets"]) else ""
             print(
-                f"    cheap {start_local:%H:%M}–{end_local:%H:%M}   "
+                f"    off-peak {start_local:%H:%M}–{end_local:%H:%M}   "
                 f"{period['kwh']:.2f} kWh @ {rate:.2f}p{smart}"
             )
         if kwh:
-            print(f"    {cheap_kwh / kwh * 100:.0f}% of the day's usage at the cheap rate")
+            print(f"    {cheap_kwh / kwh * 100:.0f}% of the day's usage at the off-peak rate")
 
     if args.peaks:
         print(f"\nTop {args.peaks} half hours by usage")
         print("  A half hour at 7 kW is 3.5 kWh. 'meter' is the interval total the meter reported;")
-        print("  'buckets' is what the tariff charged, which should add up to the same.\n")
+        print("  'buckets' is what the tariff charged, which should add up to the same.")
+        print("  The EV_DEVICE bucket is a fixed billing allocation, not a measurement of the car:")
+        print("  the rest of its draw lands in the household bucket at the same price.\n")
         for row in sorted(rows, key=lambda r: r["kwh"] or 0, reverse=True)[: args.peaks]:
             meter = row["kwh"] or 0
             charged = row["charged_kwh"] or 0
