@@ -9,6 +9,7 @@ extension AppDelegate {
         setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
         removeButton?.isEnabled = apiKey != nil
         notifyCheck?.state = notifyEnabled ? .on : .off
+        dispatchCheck_?.state = dispatchAlertEnabled ? .on : .off
         refreshMeterPicker()
         loadMeterChoices()
         NSApp.activate(ignoringOtherApps: true)
@@ -58,9 +59,13 @@ extension AppDelegate {
         let check = NSButton(
             checkboxWithTitle: "Alert 10 minutes before the cheap rate starts", target: self,
             action: #selector(toggleNotify(_:)))
+        let dispatchCheck = NSButton(
+            checkboxWithTitle: "Alert when the smart-charge plan changes", target: self,
+            action: #selector(toggleDispatchNotify(_:)))
+
         let test = NSButton(title: "Send Test Alert", target: self, action: #selector(testAlert))
 
-        let stack = NSStackView(views: [heading, keyRow, status] + meterRows + [check, test])
+        let stack = NSStackView(views: [heading, keyRow, status] + meterRows + [check, dispatchCheck, test])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -92,6 +97,7 @@ extension AppDelegate {
         keyField = field
         keyStatus = status
         notifyCheck = check
+        dispatchCheck_ = dispatchCheck
         removeButton = remove
     }
 
@@ -146,6 +152,10 @@ extension AppDelegate {
             meterChoices = found
             refreshMeterPicker()
         }
+    }
+
+    @objc func toggleDispatchNotify(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "notifyDispatchChange")
     }
 
     @objc func toggleNotify(_ sender: NSButton) {

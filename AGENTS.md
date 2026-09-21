@@ -235,6 +235,11 @@ against real data. Treat those paths as unverified.
   sub-pixel sliver that renders as a hairline between bars — 396 of them before this was fixed.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
+- **Dispatch alerts match slots within a five-minute tolerance** rather than comparing lists.
+  Octopus re-plans by a minute or two on almost every fetch, so an exact comparison alerts several
+  times an hour. Only future dispatches count; completed ones are history and churn. A ten-minute
+  cooldown covers a plan that flaps between two shapes, and the first fetch after launch never
+  alerts because there is nothing to compare against.
 - **Automatic refreshing stops after 10 consecutive failures** until "Refresh Now". Without this a
   bad key retries every 30 seconds indefinitely.
 - **Meters are discovered as matched pairs.** Taking the first property and the first agreement

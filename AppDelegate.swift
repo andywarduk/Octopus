@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var keyField: NSSecureTextField?
     var keyStatus: NSTextField?
     var notifyCheck: NSButton?
+    var dispatchCheck_: NSButton?
     var removeButton: NSButton?
     lazy var usageControllers: [Fuel: UsageWindowController] = Dictionary(
         uniqueKeysWithValues: Fuel.allCases.map {
@@ -29,6 +30,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var lastAlertAt: Date?
     /// Dispatches get re-planned a few minutes either way, which would otherwise alert again.
     static let alertCooldown: TimeInterval = 30 * 60
+    /// When the last "plan changed" alert went out. A plan that flaps between two shapes would
+    /// otherwise alert on every flip.
+    var lastDispatchAlertAt: Date?
+    static let dispatchCooldown: TimeInterval = 10 * 60
+    var dispatchAlertEnabled: Bool {
+        UserDefaults.standard.object(forKey: "notifyDispatchChange") as? Bool ?? true
+    }
     /// Consecutive failed fetches. Automatic refreshing stops at maxFailures so a bad key or a
     /// long outage can't hammer the API; "Refresh Now" clears it.
     var failures = 0
@@ -85,9 +93,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         loading = true
         Task {
             do {
+                // Keep the old plan to compare against; nil on the first fetch, which must not alert.
+                let previous = snapshot
                 snapshot = try await fetchSnapshot(apiKey: key)
                 lastError = nil
                 failures = 0
+                if let previous, let current = snapshot {
+                    checkDispatchChange(from: previous, to: current)
+                }
             } catch {
                 failures += 1
                 if failures >= Self.maxFailures {

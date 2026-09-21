@@ -31,7 +31,10 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   triangle if there is no data or an error. Hover it for the current price.
 - **Menu:** the current rate and when it next changes, each car's charge level and charging status,
   and the cheap windows in the next 48 hours including smart-charge dispatches.
-- **Alert:** a notification 10 minutes before a cheap window starts. Toggle it in Settings.
+- **Alerts:** a notification 10 minutes before a cheap window starts, and another when the
+  smart-charge plan changes — a slot added, dropped, moved by more than five minutes, or cancelled
+  altogether. Octopus nudges dispatches by a minute or two constantly, and those are ignored.
+  Both can be turned off in Settings.
 - **Electricity Use… / Gas Use…:** a week of use as stacked columns.
 
 ### The usage windows

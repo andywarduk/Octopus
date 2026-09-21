@@ -50,6 +50,49 @@ func isCheap(_ s: Snapshot, now: Date) -> Bool {
     currentInterval(cheapIntervals(s, now: now), now: now) != nil
 }
 
+/// Dispatches still to come. Completed ones are history and churn constantly, so they are not
+/// part of "the plan".
+func futureDispatches(_ s: Snapshot, now: Date) -> [Interval] {
+    s.dispatches.filter { $0.end > now }.sorted { $0.start < $1.start }
+}
+
+struct DispatchChange {
+    var title: String
+    var body: String
+}
+
+/// How the charge plan changed, or nil when it is the same plan. Octopus re-plans dispatches by a
+/// few minutes constantly, so a slot that merely shifted within `tolerance` is not a change —
+/// alerting on that would be noise several times an hour.
+func dispatchChange(
+    from old: [Interval], to new: [Interval], tz: TimeZone, tolerance: TimeInterval = 5 * 60
+) -> DispatchChange? {
+    var unmatched = old
+    var added: [Interval] = []
+    for slot in new {
+        let match = unmatched.firstIndex {
+            abs($0.start.timeIntervalSince(slot.start)) <= tolerance
+                && abs($0.end.timeIntervalSince(slot.end)) <= tolerance
+        }
+        if let match { unmatched.remove(at: match) } else { added.append(slot) }
+    }
+    guard !added.isEmpty || !unmatched.isEmpty else { return nil }
+
+    func describe(_ slots: [Interval]) -> String {
+        slots.map { "\(formatted($0.start, "HH:mm", tz))–\(formatted($0.end, "HH:mm", tz))" }
+            .joined(separator: ", ")
+    }
+    if new.isEmpty {
+        return DispatchChange(title: "Smart charge cancelled", body: "No charge is planned.")
+    }
+    let plan = "Now planned for \(describe(new))."
+    if old.isEmpty {
+        return DispatchChange(title: "Smart charge planned", body: plan)
+    }
+    let title = added.isEmpty ? "Smart charge slot dropped" : "Smart charge plan changed"
+    return DispatchChange(title: title, body: plan)
+}
+
 /// Domestic energy VAT. Only used to gross up the rare tariff that has no stated rates, since
 /// applicableRates quotes prices before tax while everything else on screen includes it.
 let vatMultiplier = 1.05

@@ -18,6 +18,20 @@ extension AppDelegate {
         Task { await post(title: "Cheap rate in \(mins) min", body: body) }
     }
 
+    /// Alerts when the smart-charge plan gains or loses a slot.
+    func checkDispatchChange(from previous: Snapshot, to current: Snapshot) {
+        guard dispatchAlertEnabled else { return }
+        let now = Date()
+        if let last = lastDispatchAlertAt, now.timeIntervalSince(last) < Self.dispatchCooldown { return }
+        guard
+            let change = dispatchChange(
+                from: futureDispatches(previous, now: now), to: futureDispatches(current, now: now),
+                tz: current.tz)
+        else { return }
+        lastDispatchAlertAt = now
+        Task { await post(title: change.title, body: change.body) }
+    }
+
     /// Posts a notification. Returns a description of what's wrong if it couldn't be delivered.
     @discardableResult
     func post(title: String, body: String) async -> String? {

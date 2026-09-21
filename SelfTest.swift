@@ -138,6 +138,26 @@ func selfTest() {
     }
 
     // A part-published day must not make the week look settled, or the rest never arrives.
+    // Octopus re-plans slots by a few minutes constantly; only a real change should alert.
+    print("  dispatch changes:")
+    func slot(_ from: String, _ to: String) -> Interval {
+        Interval(start: date(from), end: date(to), smart: true)
+    }
+    let planned = [slot("2026-09-20T00:30:00Z", "2026-09-20T03:00:00Z")]
+    for (label, old, new) in [
+        ("unchanged", planned, planned),
+        ("shifted 3 min", planned, [slot("2026-09-20T00:33:00Z", "2026-09-20T03:03:00Z")]),
+        ("shifted 40 min", planned, [slot("2026-09-20T01:10:00Z", "2026-09-20T03:40:00Z")]),
+        ("slot added", planned, planned + [slot("2026-09-20T13:00:00Z", "2026-09-20T14:00:00Z")]),
+        ("slot dropped", planned + [slot("2026-09-20T13:00:00Z", "2026-09-20T14:00:00Z")], planned),
+        ("all cancelled", planned, []),
+        ("first plan", [], planned),
+    ] {
+        let change = dispatchChange(from: old, to: new, tz: tzLondon)
+        print("    \(label.padding(toLength: 16, withPad: " ", startingAt: 0)): "
+            + (change.map { "\($0.title) — \($0.body)" } ?? "no alert"))
+    }
+
     print("  completeness:")
     let dayStart = date("2026-09-18T23:00:00Z")   // 00:00 BST
     let dayEnd = dayStart.addingTimeInterval(86400)
