@@ -76,8 +76,8 @@ settled by rendering it at a much lower value and confirming the difference.
 | `SelfTest.swift` | `--selftest` output |
 | `main.swift` | Entry point and command-line flags |
 
-`octopus_rate.py`, `octopus_history.py` and `gas_probe.py` are standalone; standard library only,
-Python 3.9+. They duplicate the auth and meter-selection logic rather than sharing it.
+`octopus_rate.py` and `octopus_history.py` are standalone; standard library only, Python 3.9+.
+They duplicate the auth and meter-selection logic rather than sharing it.
 
 ## The API
 
@@ -147,9 +147,11 @@ These were all found the hard way; each one produced a plausible-looking wrong a
 - **Zero usage is data.** A meter reporting all zeros still returns readings and standing charges.
   Decide emptiness on reading count, never on consumption, or an unused supply reports as an error.
 
-`gas_probe.py` exists to answer questions like these against a real account: it tries every
-reading frequency against several filters and prints what comes back. Reach for it rather than
-guessing when data is missing.
+When data is missing, probe before guessing. A throwaway script that walks every reading frequency
+against every way of identifying the meter — by supply point, by device id, and unfiltered — and
+prints what each returns will answer it in one run. Every gas finding above came from doing that,
+after two wrong guesses: an empty chart looked like the wrong frequency, then like the wrong
+filter, and was actually a null field in a place I had not looked.
 
 ## Swift concurrency
 
@@ -208,8 +210,6 @@ against real data. Treat those paths as unverified.
   app does not reach them. `octopus_rate.py` in particular lags the app's logic.
 - **The usage cache is in memory only**, so a relaunch refetches. Persisting settled weeks would
   need invalidation on a tariff change.
-- **`gas_probe.py` is a diagnostic**, not part of the app. Keep it for questions like "why is this
-  fuel empty", or delete it if the API behaviour stops being surprising.
 
 ## Design decisions worth keeping
 

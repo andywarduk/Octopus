@@ -6,6 +6,13 @@ charts of your electricity and gas use.
 
 There are also two command-line scripts covering the same ground, for the terminal or for cron.
 
+> **This project was vibe-coded.** Every line was written by Claude (Anthropic's Claude Code) from
+> conversational prompts, then checked against a real Octopus account. It has no test suite beyond
+> the built-in `--selftest`, and much of it — the chart in particular — was verified by rendering
+> it and looking, rather than by anything automated. Read it with that in mind before trusting it
+> with anything that matters. `AGENTS.md` records what the API actually does and why the code is
+> shaped the way it is.
+
 ## Menu bar app
 
 Requires macOS 13 or later and Xcode's command line tools.
@@ -47,11 +54,10 @@ Days Octopus has not published yet show a grey dash rather than an empty bar —
 different things. Octopus runs roughly two days behind, so the last day or two of the current week
 is normally blank.
 
-The standing charge is reported below the chart rather than stacked, since it is not usage. That
-means the pounds total will not match a bill on its own.
+In pounds, the standing charge stacks underneath as a grey band, so a column totals what the period
+actually cost. It is left out of the kWh view, where it would be energy that was never delivered.
 
-All prices and costs include VAT, matching your bill. The menu bar footer shows the daily standing
-charge alongside.
+All prices and costs include VAT, matching your bill.
 
 ### Multiple properties and meters
 
