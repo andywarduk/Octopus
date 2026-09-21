@@ -86,6 +86,7 @@ extension AppDelegate {
         for (title, action, key) in [
             ("Refresh now", #selector(refreshNow), "r"),
             ("Electricity Use…", #selector(showUsage), "u"),
+            ("Gas Use…", #selector(showGasUsage), "g"),
             ("Settings…", #selector(showSettings), ","),
             ("Quit", #selector(quit), "q"),
         ] {

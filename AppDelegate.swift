@@ -16,24 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var keyStatus: NSTextField?
     var notifyCheck: NSButton?
     var removeButton: NSButton?
-    var usageWindow: NSWindow?
-    var usageChart: UsageChartView?
-    var usageStatus: NSTextField?
-    var usageFooter: NSTextField?
-    var usageSeries = UsageSeries()
-    var usageScale: NSSegmentedControl?
-    var meterPicker: NSPopUpButton?
+    lazy var usageControllers: [Fuel: UsageWindowController] = Dictionary(
+        uniqueKeysWithValues: Fuel.allCases.map {
+            ($0, UsageWindowController(fuel: $0, apiKey: { [weak self] in self?.apiKey }))
+        })
+    var meterPickers: [Fuel: NSPopUpButton] = [:]
     var meterChoices: [MeterChoice] = []
-    var usageWeeksBack = 0
-    var usageBack: NSButton?
-    var usageForward: NSButton?
-    var usageRange: NSTextField?
-    var usageStatusHeight: NSLayoutConstraint?
-    /// Fetched weeks, keyed by meter and offset. A week is 7 requests, so revisiting one
-    /// should not go back to the API.
-    var usageCache: [String: CachedUsage] = [:]
-    var usageGranularity: Granularity = .day
-    var usageLoading = false
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?
@@ -113,6 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
     }
 
+
+    @objc func showUsage() { usageControllers[.electricity]?.show() }
+
+    @objc func showGasUsage() { usageControllers[.gas]?.show() }
 
     @objc func refreshNow() { refresh(manual: true) }
 

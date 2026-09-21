@@ -220,6 +220,9 @@ def main():
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--mpan", help="which import meter to use, if the account has several")
     parser.add_argument(
+        "--meters", action="store_true",
+        help="list the electricity and gas meters on the account, then stop")
+    parser.add_argument(
         "--peaks", type=int, metavar="N",
         help="list the N highest-usage half hours, with the implied kW and the bucket split")
     args = parser.parse_args()
@@ -232,6 +235,35 @@ def main():
     token = token["obtainKrakenToken"]["token"]
 
     account = run("{viewer{accounts{number}}}", token=token)["viewer"]["accounts"][0]["number"]
+
+    if args.meters:
+        listing = run(
+            """query($a:String!){account(accountNumber:$a){
+                 properties{
+                   id
+                   address
+                   electricityMeterPoints{mpan direction status}
+                   gasMeterPoints{mprn status}
+                 }
+                 electricityAgreements(active:true){meterPoint{mpan}}
+                 gasAgreements(active:true){meterPoint{mprn}}
+               }}""",
+            {"a": account},
+            token,
+        )["account"]
+        live_e = {(a.get("meterPoint") or {}).get("mpan") for a in listing.get("electricityAgreements") or []}
+        live_g = {(a.get("meterPoint") or {}).get("mprn") for a in listing.get("gasAgreements") or []}
+        for prop in listing.get("properties") or []:
+            print(f"Property {prop['id']}: {(prop.get('address') or '').splitlines()[0] if prop.get('address') else '?'}")
+            for point in prop.get("electricityMeterPoints") or []:
+                live = "active agreement" if point.get("mpan") in live_e else "no active agreement"
+                print(f"    electricity  MPAN {point.get('mpan')}  {point.get('direction') or ''}  {live}")
+            for point in prop.get("gasMeterPoints") or []:
+                live = "active agreement" if point.get("mprn") in live_g else "no active agreement"
+                print(f"    gas          MPRN {point.get('mprn')}  {point.get('status') or ''}  {live}")
+            if not (prop.get("electricityMeterPoints") or prop.get("gasMeterPoints")):
+                print("    (no meters)")
+        return
 
     details = run(
         """query($a:String!){account(accountNumber:$a){

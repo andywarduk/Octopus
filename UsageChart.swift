@@ -47,12 +47,17 @@ func axisScale(_ maxValue: Double) -> (max: Double, step: Double) {
     return (maxValue, maxValue)
 }
 
-/// - Parameter withUnit: appends "kWh". Money needs nothing: the £ already says what it is.
-func formatUsage(_ value: Double, _ unit: UsageUnit, short: Bool = false, withUnit: Bool = false) -> String {
+/// - Parameters:
+///   - withUnit: appends the energy label. Money needs nothing: the £ already says what it is.
+///   - energyLabel: kWh for electricity; gas meters may report cubic metres.
+func formatUsage(
+    _ value: Double, _ unit: UsageUnit, short: Bool = false, withUnit: Bool = false,
+    energyLabel: String = "kWh"
+) -> String {
     switch unit {
     case .kwh:
         let number = short ? String(format: "%g", value) : String(format: "%.1f", value)
-        return withUnit ? number + " kWh" : number
+        return withUnit ? number + " " + energyLabel : number
     case .money:
         let pounds = value / 100
         // Axis ticks stay in pounds throughout, so the scale reads consistently from zero up.
@@ -70,6 +75,7 @@ final class UsageChartView: NSView {
     var granularity: Granularity = .day { didSet { needsDisplay = true } }
     /// Shown centred when there is nothing to plot, so the plot area is never just blank.
     var placeholder: String? { didSet { needsDisplay = true } }
+    var energyLabel = "kWh" { didSet { needsDisplay = true } }
     var tz: TimeZone = .current
     private var hoverIndex: Int?
     private var plotRect: CGRect = .zero
@@ -344,7 +350,7 @@ final class UsageChartView: NSView {
             guard total > 0 else { continue }
             SeriesColor.of(band, dark: isDark).setFill()
             NSBezierPath(roundedRect: CGRect(x: x, y: y + 1, width: 9, height: 9), xRadius: 2, yRadius: 2).fill()
-            let text = "\(band.rawValue) \(formatUsage(total, unit, withUnit: true))"
+            let text = "\(band.rawValue) \(formatUsage(total, unit, withUnit: true, energyLabel: energyLabel))"
             label(text, at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
             x += 14 + text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width + 16
         }
@@ -359,18 +365,18 @@ final class UsageChartView: NSView {
         let heading: String
         if granularity == .day {
             heading = period.hasData
-                ? "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit), unit, withUnit: true))"
+                ? "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit), unit, withUnit: true, energyLabel: energyLabel))"
                 : formatted(period.start, "EEE d MMM", tz)
         } else {
             heading = "\(formatted(period.start, "EEE d MMM HH:mm", tz))–\(formatted(period.end, "HH:mm", tz))"
-                + "  ·  \(formatUsage(period.total(unit), unit, withUnit: true))"
+                + "  ·  \(formatUsage(period.total(unit), unit, withUnit: true, energyLabel: energyLabel))"
         }
         var lines = [heading]
         if !period.hasData {
             lines.append("No data yet — Octopus publishes about two days behind")
         }
         for band in RateBand.allCases where period.value(band, unit) > 0 {
-            var line = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true))"
+            var line = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true, energyLabel: energyLabel))"
             if let price = period.price(band) { line += String(format: " @ %.2fp", price) }
             lines.append(line)
         }

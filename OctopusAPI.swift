@@ -53,11 +53,11 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
     }
 
     let choices = try await discoverMeters(token: token)
-    guard let choice = MeterPreference.resolve(from: choices) else {
+    guard let choice = MeterPreference.resolve(from: choices, fuel: .electricity) else {
         throw ApiError(message: "No electricity import meter found")
     }
     let account = choice.accountNumber
-    let mpan = choice.mpan
+    let mpan = choice.supplyPoint
 
     let agr = try await gql(
         """

@@ -73,6 +73,40 @@ func selfTest() {
         let state = day.hasData ? formatUsage(day.total(.kwh), .kwh, withUnit: true) : "no data published"
         print("    \(formatted(day.start, "EEE d MMM", tzLondon)): \(state)")
     }
+    // Gas puts the energy on the reading and leaves the statistic's value null; electricity
+    // does the opposite. Both shapes must parse.
+    print("  reading shapes:")
+    let gasStat = ["type": "CONSUMPTION_COST", "label": "CONSUMPTION", "value": NSNull(),
+                   "costInclTax": ["estimatedAmount": "64.20", "pricePerUnit": NSNull()]] as [String: Any]
+    let elecStat = ["type": "CONSUMPTION_COST", "label": "CONSUMPTION_CHARGE_ECO7_NIGHT_H", "value": "3.0",
+                    "costInclTax": ["estimatedAmount": "20.70", "pricePerUnit": ["amount": "6.89997"]]] as [String: Any]
+    for (name, stats, reading) in [
+        ("gas, one bucket, null value", [gasStat], 10.7541),
+        ("electricity, bucket carries kWh", [elecStat], 0.0),
+        ("two buckets, both null", [gasStat, gasStat], 10.7541),
+    ] {
+        let consumption = stats.filter { ($0["type"] as? String) == "CONSUMPTION_COST" }
+        let parsed = stats.compactMap { stat -> String? in
+            let money = stat["costInclTax"] as? [String: Any] ?? [:]
+            let amount = toDouble(money["estimatedAmount"]) ?? 0
+            let energy = toDouble(stat["value"]) ?? (consumption.count == 1 ? reading : 0)
+            guard energy > 0 else { return nil }
+            let quoted = toDouble((money["pricePerUnit"] as? [String: Any])?["amount"])
+            return String(format: "%.4f kWh @ %.2fp", energy, quoted ?? (amount / energy))
+        }
+        print("    \(name): \(parsed.isEmpty ? "nothing parsed" : parsed.joined(separator: ", "))")
+    }
+
+    // A meter that used nothing still reports: standing charges arrive with no consumption.
+    let quietDay = date("2026-09-18T23:00:00Z")
+    let quiet = aggregateUsage(
+        [], standing: (0..<48).map { (quietDay.addingTimeInterval(Double($0) * 1800), 0.68) },
+        tz: tzLondon, by: .day, window: (quietDay, quietDay.addingTimeInterval(86400)))
+    for day in quiet {
+        print("  zero-usage day: hasData \(day.hasData), total \(formatUsage(day.total(.kwh), .kwh, withUnit: true)), "
+            + "standing \(formatUsage(day.standingPence, .money))")
+    }
+
     print("  week windows (7 days each):")
     for back in [0, 1, 2] {
         let w = usageDateWindow(weeksBack: back, days: 7, tz: tzLondon)

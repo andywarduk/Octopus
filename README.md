@@ -47,13 +47,24 @@ your login Keychain, never in a file. Get the key from the API access page of yo
 - After 10 consecutive failures it stops fetching and shows the error in the menu, so a bad key or an
   outage can't keep hitting the API. **Refresh now** (or saving a key) starts it again.
 
+### Gas
+
+**Gas Use…** opens a second window with the same controls: week navigation, kWh or pounds, day or
+half hour. Gas is single-rate, so its columns are one band rather than two, and there is no
+smart-charge marker. The unit comes from the readings, since some gas meters report cubic metres
+rather than kWh. Meters that only report daily are detected — the half-hour option is disabled and
+the footer says so — because the half-hourly query comes back empty for them.
+
+The two windows are independent: separate week position, cache and meter.
+
 ### Multiple properties and meters
 
-The account, property and import meter are discovered as matched pairs, so a property is never
-asked for a meter that belongs to a different address. Only meters with an active agreement are
-offered. If the account has more than one, **Settings** has a picker; the choice is remembered and
-applies to both the menu bar rate and the usage chart. The scripts print a note when there is more
-than one, and `octopus_history.py --mpan` selects one.
+The account, property and meter are discovered as matched pairs, so a property is never asked for
+a meter that belongs to a different address. Only meters with an active agreement are offered.
+**Settings** lists a picker per fuel, enabled when the account has more than one of that fuel; the
+choice is remembered per fuel. The electricity choice also drives the menu bar rate. The scripts
+print a note when there is more than one, `octopus_history.py --mpan` selects one, and
+`--meters` lists every electricity and gas meter on the account.
 
 ### Notes
 
@@ -82,7 +93,7 @@ than one, and `octopus_history.py --mpan` selects one.
 | `Model.swift` | `Interval`, `Car`, `Snapshot`, `Line` |
 | `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
 | `Keychain.swift` | Reading, saving and removing the API key |
-| `MeterSelection.swift` | Discovering import meters per property, and the saved choice |
+| `MeterSelection.swift` | Fuels, discovering meters per property, and the saved choice per fuel |
 | `OctopusAPI.swift` | GraphQL calls that build a `Snapshot` |
 | `AppIcon.swift` | The app icon, drawn in code |
 | `AppDelegate.swift` | Status item, the 30-second tick, and the refresh cycle |
@@ -91,7 +102,7 @@ than one, and `octopus_history.py --mpan` selects one.
 | `AppDelegate+Settings.swift` | The Settings window |
 | `Usage.swift` | Half-hourly usage: rate bands, daily aggregation, the measurements query |
 | `UsageChart.swift` | The stacked column chart and its offscreen renderer |
-| `AppDelegate+Usage.swift` | The Electricity Use window |
+| `UsageWindowController.swift` | One usage window, instantiated per fuel |
 | `SelfTest.swift` | `--selftest` output |
 | `main.swift` | Entry point and command-line flags |
 

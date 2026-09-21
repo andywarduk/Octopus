@@ -1,45 +1,59 @@
-// Which account, property and electricity meter the app reports on.
+// Which account, property and meter the app reports on.
 //
 // Picking the first of each list independently is wrong on a multi-property account: the property
-// and the MPAN can belong to different addresses, and the measurements query then asks one
+// and the supply point can belong to different addresses, and the measurements query then asks one
 // property for another's meter. These are discovered as matched pairs instead.
 
 import Foundation
 
+enum Fuel: String, CaseIterable {
+    case electricity, gas
+
+    var title: String { self == .electricity ? "Electricity" : "Gas" }
+    var windowTitle: String { "\(title) Use" }
+    /// Electricity is metered in kWh; gas may report cubic metres, so its unit comes from the data.
+    var defaultEnergyLabel: String { "kWh" }
+}
+
 struct MeterChoice: Equatable {
+    var fuel: Fuel
     var accountNumber: String
     var propertyId: String
     var address: String
-    var mpan: String
+    /// MPAN for electricity, MPRN for gas.
+    var supplyPoint: String
 
     /// Stable across launches, so a saved preference survives reordering.
-    var id: String { "\(accountNumber)|\(propertyId)|\(mpan)" }
+    var id: String { "\(fuel.rawValue)|\(accountNumber)|\(propertyId)|\(supplyPoint)" }
 
     var label: String {
-        let place = address.split(separator: "\n").first.map(String.init) ?? address
-        return place.isEmpty ? "MPAN \(mpan)" : "\(place) · \(mpan)"
+        let place = address.split(separator: ",").first.map(String.init) ?? address
+        let trimmed = place.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? supplyPoint : "\(trimmed) · \(supplyPoint)"
     }
 }
 
 enum MeterPreference {
-    static let key = "selectedMeter"
+    static func key(_ fuel: Fuel) -> String { "selectedMeter.\(fuel.rawValue)" }
 
-    static var savedId: String? { UserDefaults.standard.string(forKey: key) }
-
-    static func save(_ choice: MeterChoice?) {
-        guard let choice else { return UserDefaults.standard.removeObject(forKey: key) }
-        UserDefaults.standard.set(choice.id, forKey: key)
+    static func savedId(_ fuel: Fuel) -> String? {
+        UserDefaults.standard.string(forKey: key(fuel))
     }
 
-    /// The saved choice if it still exists, else the first. Never silently picks a different
-    /// meter than the one that was saved.
-    static func resolve(from choices: [MeterChoice]) -> MeterChoice? {
-        if let savedId, let match = choices.first(where: { $0.id == savedId }) { return match }
-        return choices.first
+    static func save(_ choice: MeterChoice) {
+        UserDefaults.standard.set(choice.id, forKey: key(choice.fuel))
+    }
+
+    /// The saved choice if it still exists, else the first for that fuel. Never silently picks a
+    /// different meter than the one that was saved.
+    static func resolve(from choices: [MeterChoice], fuel: Fuel) -> MeterChoice? {
+        let forFuel = choices.filter { $0.fuel == fuel }
+        if let saved = savedId(fuel), let match = forFuel.first(where: { $0.id == saved }) { return match }
+        return forFuel.first
     }
 }
 
-/// Every import meter on the account, paired with the property it actually sits at.
+/// Every meter on the account, paired with the property it actually sits at.
 func discoverMeters(token: String) async throws -> [MeterChoice] {
     let who = try await gql("{viewer{accounts{number}}}", token: token)
     guard let accounts = (who["viewer"] as? [String: Any])?["accounts"] as? [[String: Any]],
@@ -52,31 +66,50 @@ func discoverMeters(token: String) async throws -> [MeterChoice] {
         let data = try await gql(
             """
             query($a:String!){account(accountNumber:$a){
-              properties{id address electricityMeterPoints{mpan direction}}
+              properties{
+                id
+                address
+                electricityMeterPoints{mpan direction}
+                gasMeterPoints{mprn}
+              }
               electricityAgreements(active:true){meterPoint{mpan}}
+              gasAgreements(active:true){meterPoint{mprn}}
             }}
             """, ["a": number], token: token)
         let acc = data["account"] as? [String: Any] ?? [:]
         // Only meters with a live agreement: an old one at a previous address has no rates.
-        let active = Set(
-            ((acc["electricityAgreements"] as? [[String: Any]]) ?? []).compactMap {
-                ($0["meterPoint"] as? [String: Any])?["mpan"] as? String
-            })
+        func liveSupplyPoints(_ field: String, _ key: String) -> Set<String> {
+            Set(
+                ((acc[field] as? [[String: Any]]) ?? []).compactMap {
+                    ($0["meterPoint"] as? [String: Any])?[key] as? String
+                })
+        }
+        let liveElectricity = liveSupplyPoints("electricityAgreements", "mpan")
+        let liveGas = liveSupplyPoints("gasAgreements", "mprn")
+
         for property in (acc["properties"] as? [[String: Any]]) ?? [] {
             guard let propertyId = property["id"] as? String else { continue }
+            let address = property["address"] as? String ?? ""
             for point in (property["electricityMeterPoints"] as? [[String: Any]]) ?? [] {
                 guard
                     let mpan = point["mpan"] as? String,
                     (point["direction"] as? String)?.uppercased() != "EXPORT",
-                    active.contains(mpan)
+                    liveElectricity.contains(mpan)
                 else { continue }
                 choices.append(
                     MeterChoice(
-                        accountNumber: number, propertyId: propertyId,
-                        address: property["address"] as? String ?? "", mpan: mpan))
+                        fuel: .electricity, accountNumber: number, propertyId: propertyId,
+                        address: address, supplyPoint: mpan))
+            }
+            for point in (property["gasMeterPoints"] as? [[String: Any]]) ?? [] {
+                guard let mprn = point["mprn"] as? String, liveGas.contains(mprn) else { continue }
+                choices.append(
+                    MeterChoice(
+                        fuel: .gas, accountNumber: number, propertyId: propertyId,
+                        address: address, supplyPoint: mprn))
             }
         }
     }
-    guard !choices.isEmpty else { throw ApiError(message: "No electricity import meter found") }
+    guard !choices.isEmpty else { throw ApiError(message: "No meter with an active agreement found") }
     return choices
 }
