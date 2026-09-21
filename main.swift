@@ -18,6 +18,28 @@ if let i = CommandLine.arguments.firstIndex(of: "--iconset"), i + 1 < CommandLin
     exit(0)
 }
 
+// OctopusMenuBar --chartdemo DIR : render the usage chart to PNGs to check the layout.
+if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandLine.arguments.count {
+    let dir = CommandLine.arguments[i + 1]
+    MainActor.assumeIsolated {
+        let series = sampleUsageWeek(tz: .current)
+        for (name, unit, scale, dark) in [
+            ("kwh-light", UsageUnit.kwh, Granularity.day, false),
+            ("money-dark", .money, .day, true),
+            ("halfhour-light", .kwh, .halfHour, false),
+            ("halfhour-dark", .kwh, .halfHour, true),
+        ] {
+            renderUsageChart(
+                periods: series.periods(scale), unit: unit, granularity: scale, dark: dark,
+                size: CGSize(width: 604, height: 300), to: "\(dir)/chart-\(name).png")
+        }
+        let hairlines = countHairlines(
+            periods: series.periods(.halfHour), dark: false, size: CGSize(width: 604, height: 300))
+        print("half-hour hairline pixels: \(hairlines)")
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--selftest") {
     selfTest()
     exit(0)

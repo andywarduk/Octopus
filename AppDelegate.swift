@@ -16,6 +16,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var keyStatus: NSTextField?
     var notifyCheck: NSButton?
     var removeButton: NSButton?
+    var usageWindow: NSWindow?
+    var usageChart: UsageChartView?
+    var usageStatus: NSTextField?
+    var usageFooter: NSTextField?
+    var usageSeries = UsageSeries()
+    var usageScale: NSSegmentedControl?
+    var usageGranularity: Granularity = .day
+    var usageLoading = false
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?

@@ -85,6 +85,7 @@ extension AppDelegate {
         menu.addItem(.separator())
         for (title, action, key) in [
             ("Refresh now", #selector(refreshNow), "r"),
+            ("Electricity Use…", #selector(showUsage), "u"),
             ("Settings…", #selector(showSettings), ","),
             ("Quit", #selector(quit), "q"),
         ] {

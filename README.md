@@ -28,6 +28,12 @@ your login Keychain, never in a file. Get the key from the API access page of yo
   - Each car's charge level, target, and charging status.
   - The cheap windows in the next 48 hours, including smart-charging dispatches.
 - **Alert:** a notification 10 minutes before a cheap window starts. Turn it on or off, or send a test, in Settings.
+- **Electricity Use…:** a week of use as stacked columns, switchable between kWh and pounds, and
+  between a column per day and one per half hour. Each column splits into the cheap rate,
+  smart-charge dispatches and the standard rate, taken from what each half hour was actually billed.
+  Hover a column for its breakdown. The standing charge is reported below the chart rather than
+  stacked, since it isn't usage. Switching unit or granularity re-buckets what was already fetched;
+  only **Reload** goes back to the API.
 
 ### Refreshing
 
@@ -47,8 +53,14 @@ your login Keychain, never in a file. Get the key from the API access page of yo
   reading and the smart-control state.
 - The app icon is drawn in code. `build.sh` renders it into `AppIcon.icns` with `iconutil`; if that fails
   the app still builds, but notifications use a generic icon.
-- `OctopusMenuBar --selftest` prints sample menus from fixed data, without using the network.
-  `OctopusMenuBar --iconset DIR` writes the icon PNGs.
+- The usage chart reads `pricePerUnit` on each half hour, so bands follow what you were billed rather
+  than an assumed schedule. Every interval lists all four tariff buckets; only the one with kWh
+  against it was charged. Amounts are in pence even though `costCurrency` says GBP.
+- `OctopusMenuBar --selftest` prints sample menus and usage banding from fixed data, without using the
+  network. `OctopusMenuBar --iconset DIR` writes the icon PNGs, and `--chartdemo DIR` renders the
+  usage chart to PNGs in both themes and units, for checking the layout without launching the app.
+  Its sample week is seeded, so the images are identical run to run; it also counts antialiased
+  seams between half-hourly bars, which should stay at zero apart from genuine gaps in the data.
 
 ### Source layout
 
@@ -65,6 +77,9 @@ your login Keychain, never in a file. Get the key from the API access page of yo
 | `AppDelegate+Menu.swift` | Icon state and menu building |
 | `AppDelegate+Notifications.swift` | "Cheap rate soon" alerts |
 | `AppDelegate+Settings.swift` | The Settings window |
+| `Usage.swift` | Half-hourly usage: rate bands, daily aggregation, the measurements query |
+| `UsageChart.swift` | The stacked column chart and its offscreen renderer |
+| `AppDelegate+Usage.swift` | The Electricity Use window |
 | `SelfTest.swift` | `--selftest` output |
 | `main.swift` | Entry point and command-line flags |
 

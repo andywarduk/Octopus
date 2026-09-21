@@ -28,6 +28,37 @@ func selfTest() {
         print("  \(label): \(chargingStatus(car, now: date("2026-09-19T15:13:00Z")) ?? "(no line)")")
     }
 
+    print("--- usage banding")
+    let tzLondon = TimeZone(identifier: "Europe/London")!
+    let midnight = date("2026-09-18T23:00:00Z")   // 00:00 BST on the 19th
+    let noon = date("2026-09-19T12:00:00Z")
+    let buckets = [
+        UsageBucket(start: midnight, label: "CONSUMPTION_CHARGE_ECO7_NIGHT_H", kwh: 3.0, pence: 20.7, pricePerUnit: 6.89997),
+        UsageBucket(start: noon, label: "CONSUMPTION_CHARGE_ECO7_DAY_H", kwh: 1.0, pence: 30.37, pricePerUnit: 30.37136),
+        UsageBucket(start: noon, label: "CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H", kwh: 2.0, pence: 13.8, pricePerUnit: 6.89997),
+        UsageBucket(start: noon, label: "CONSUMPTION_CHARGE_EV_DEVICE_PEAK_H", kwh: 0.5, pence: 15.19, pricePerUnit: 30.37136),
+    ]
+    let threshold = priceThreshold(buckets)
+    print("  threshold: \(threshold.map { String(format: "%.2fp", $0) } ?? "none (single rate)")")
+    for bucket in buckets {
+        print("  \(bucket.label) @ \(String(format: "%.2f", bucket.pricePerUnit))p -> \(band(for: bucket, threshold: threshold).rawValue)")
+    }
+    for day in aggregateUsage(buckets, standing: [(midnight, 1.03)], tz: tzLondon, by: .day) {
+        let parts = RateBand.allCases
+            .filter { day.value($0, .kwh) > 0 }
+            .map { "\($0.rawValue) \(formatUsage(day.value($0, .kwh), .kwh))kWh/\(formatUsage(day.value($0, .money), .money))" }
+        print("  \(formatted(day.start, "EEE d MMM", tzLondon)): \(parts.joined(separator: ", "))")
+    }
+    // A single-rate tariff must not produce a cheap band at all.
+    let flatBuckets = buckets.map { UsageBucket(start: $0.start, label: $0.label, kwh: $0.kwh, pence: $0.pence, pricePerUnit: 30.37136) }
+    print("  flat tariff threshold: \(priceThreshold(flatBuckets).map { "\($0)" } ?? "none")")
+    print("  flat tariff bands: \(Set(flatBuckets.map { band(for: $0, threshold: priceThreshold(flatBuckets)).rawValue }).sorted())")
+    for slot in aggregateUsage(buckets, standing: [], tz: tzLondon, by: .halfHour) {
+        let parts = RateBand.allCases.filter { slot.value($0, .kwh) > 0 }.map(\.rawValue)
+        print("  half hour \(formatted(slot.start, "HH:mm", tzLondon))–\(formatted(slot.end, "HH:mm", tzLondon)): \(parts.joined(separator: " + "))")
+    }
+    print("  niceMax: 39.4 -> \(niceMax(39.4)), 2.5 -> \(niceMax(2.5)), 417 -> \(niceMax(417)), 0 -> \(niceMax(0))")
+
     var flat = snap
     flat.cheapRate = flat.peakRate
     for (label, now, s) in [
