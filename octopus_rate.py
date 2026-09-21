@@ -122,10 +122,19 @@ token = run(
 
 account = run("{viewer{accounts{number}}}", token=token)["viewer"]["accounts"][0]["number"]
 
+# The tariff states VAT-inclusive rates by name; applicableRates quotes them before tax.
 agreements = run(
     """query($a:String!){account(accountNumber:$a){electricityAgreements(active:true){
       meterPoint{mpan direction}
       timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
+      tariff{
+        __typename
+        ... on StandardTariff{unitRate standingCharge}
+        ... on PrepayTariff{unitRate standingCharge}
+        ... on DayNightTariff{dayRate nightRate standingCharge}
+        ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
+        ... on FourRateEvTariff{dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge}
+      }
     }}}""",
     {"a": account},
     token,
@@ -165,10 +174,22 @@ if data is None:
 
 # applicableRates returns the tariff's rate bands clipped to the query window, so the
 # validFrom/validTo values don't say when each band applies. Use the lowest and highest.
-values = sorted({round(float(e["node"]["value"]), 4) for e in data["applicableRates"]["edges"]})
-if not values:
-    sys.exit("No applicable rates returned.")
-cheap_rate, peak_rate = values[0], values[-1]
+VAT_MULTIPLIER = 1.05  # domestic energy; only needed for the applicableRates fallback
+RATE_FIELDS = ("unitRate", "dayRate", "nightRate", "offPeakRate", "evDevicePeakRate", "evDeviceOffPeakRate")
+
+tariff = agreement.get("tariff") or {}
+tariff_rates = sorted({round(v, 4) for f in RATE_FIELDS if (v := to_float(tariff.get(f))) and v > 0})
+if tariff_rates:
+    cheap_rate, peak_rate = tariff_rates[0], tariff_rates[-1]
+else:
+    values = sorted({round(float(e["node"]["value"]) * VAT_MULTIPLIER, 4) for e in data["applicableRates"]["edges"]})
+    if not values:
+        sys.exit("No applicable rates returned.")
+    cheap_rate, peak_rate = values[0], values[-1]
+standing_charge = to_float(tariff.get("standingCharge"))
+
+if standing_charge:
+    print(f"Standing charge {standing_charge:.2f}p/day incl VAT")
 
 scheme = agreement.get("timeOfUseScheme")
 tz = ZoneInfo((scheme or {}).get("timezone") or "Europe/London")
@@ -196,14 +217,14 @@ if DEBUG:
 
 # A single-rate tariff has no cheap window, whatever the schedule says.
 if peak_rate - cheap_rate < 0.01:
-    print(f"Now: SINGLE RATE  ({peak_rate:.2f}p/kWh)")
+    print(f"Now: SINGLE RATE  ({peak_rate:.2f}p/kWh incl VAT)")
     print("This tariff has no cheap window.")
 else:
     active_dispatches = [d for d in dispatches if parse(d["start"]) <= now < parse(d["end"])]
     in_cheap_window = any(in_window(now_local.time(), a, b) for a, b in windows)
     cheap = bool(active_dispatches) or in_cheap_window
 
-    print(f"Now: {'CHEAP' if cheap else 'PEAK'}  ({(cheap_rate if cheap else peak_rate):.2f}p/kWh)")
+    print(f"Now: {'CHEAP' if cheap else 'PEAK'}  ({(cheap_rate if cheap else peak_rate):.2f}p/kWh incl VAT)")
     if active_dispatches:
         print("In a smart-charging dispatch window.")
 

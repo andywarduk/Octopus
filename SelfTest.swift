@@ -6,7 +6,7 @@ func selfTest() {
     let tz = TimeZone(identifier: "Europe/London")!
     func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
     let snap = Snapshot(
-        cheapRate: 6.5714, peakRate: 28.9251, windows: fallbackWindows,
+        cheapRate: 6.8999, peakRate: 30.3714, standingCharge: 54.81, windows: fallbackWindows,
         dispatches: [Interval(start: date("2026-09-20T12:00:00Z"), end: date("2026-09-20T13:30:00Z"), smart: true)],
         cars: [
             Car(name: "Mini Cooper", soc: 62, target: 100, state: "SMART_CONTROL_NOT_AVAILABLE", asOf: date("2026-09-19T14:08:36Z")),
@@ -113,6 +113,12 @@ func selfTest() {
         let last = calendar(tzLondon).date(byAdding: .day, value: -1, to: w.to)!
         print("    \(back) weeks back: \(formatted(w.from, "EEE d MMM", tzLondon)) – \(formatted(last, "EEE d MMM", tzLondon))")
     }
+    // applicableRates quotes before tax; the tariff's own rates already include it.
+    print("  VAT handling:")
+    for (label, exVat) in [("standard", 28.9251), ("off-peak", 6.5714)] {
+        print(String(format: "    %@: %.4fp ex VAT -> %.4fp incl", label, exVat, exVat * vatMultiplier))
+    }
+
     print("  cache freshness:")
     let settled = CachedUsage(series: UsageSeries(), fetchedAt: date("2026-01-01T00:00:00Z"), complete: true)
     let pending = CachedUsage(series: UsageSeries(), fetchedAt: date("2026-01-01T00:00:00Z"), complete: false)

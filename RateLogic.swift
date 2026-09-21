@@ -50,6 +50,10 @@ func isCheap(_ s: Snapshot, now: Date) -> Bool {
     currentInterval(cheapIntervals(s, now: now), now: now) != nil
 }
 
+/// Domestic energy VAT. Only used to gross up the rare tariff that has no stated rates, since
+/// applicableRates quotes prices before tax while everything else on screen includes it.
+let vatMultiplier = 1.05
+
 /// How far either side of a rate switch counts as "about to change".
 let switchWindow: TimeInterval = 3 * 60
 
@@ -176,7 +180,7 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
 
     guard s.hasCheapRate else {
         lines.append(.separator)
-        lines.append(.text("Updated \(formatted(s.fetched, "HH:mm", tz))"))
+        lines.append(.text(updatedLine(s, tz: tz)))
         return lines
     }
 
@@ -194,6 +198,15 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
     }
 
     lines.append(.separator)
-    lines.append(.text("Updated \(formatted(s.fetched, "HH:mm", tz))"))
+    lines.append(.text(updatedLine(s, tz: tz)))
     return lines
+}
+
+/// One place to say the prices include VAT, and to carry the standing charge when known.
+func updatedLine(_ s: Snapshot, tz: TimeZone) -> String {
+    var text = "Prices include VAT"
+    if let standing = s.standingCharge {
+        text += String(format: " · standing charge %.2fp/day", standing)
+    }
+    return text + " · updated \(formatted(s.fetched, "HH:mm", tz))"
 }

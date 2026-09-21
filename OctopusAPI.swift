@@ -59,11 +59,23 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
     let account = choice.accountNumber
     let mpan = choice.supplyPoint
 
+    // The tariff's own rates include VAT and come named, so there is no guessing which is cheap.
+    // applicableRates excludes VAT and only gives a set of values, so it is the fallback.
     let agr = try await gql(
         """
         query($a:String!){account(accountNumber:$a){electricityAgreements(active:true){
           meterPoint{mpan direction}
           timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
+          tariff{
+            __typename
+            ... on StandardTariff{unitRate standingCharge}
+            ... on PrepayTariff{unitRate standingCharge}
+            ... on DayNightTariff{dayRate nightRate standingCharge}
+            ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
+            ... on FourRateEvTariff{
+              dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge
+            }
+          }
         }}}
         """, ["a": account], token: token)
     let agreements = ((agr["account"] as? [String: Any])?["electricityAgreements"] as? [[String: Any]]) ?? []
@@ -101,9 +113,26 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
     }
     guard let rd = ratesData else { throw ApiError(message: lastError) }
 
-    let edges = ((rd["applicableRates"] as? [String: Any])?["edges"] as? [[String: Any]]) ?? []
-    let values = edges.compactMap { toDouble(($0["node"] as? [String: Any])?["value"]) }
-    guard let cheap = values.min(), let peak = values.max() else { throw ApiError(message: "No rates returned") }
+    // Prefer the tariff's VAT-inclusive rates; fall back to applicableRates, grossing up by the
+    // VAT the tariff implies so the two sources can never disagree on screen.
+    let tariff = agreement["tariff"] as? [String: Any] ?? [:]
+    let tariffRates = ["unitRate", "dayRate", "nightRate", "offPeakRate", "evDevicePeakRate", "evDeviceOffPeakRate"]
+        .compactMap { toDouble(tariff[$0]) }
+        .filter { $0 > 0 }
+
+    let cheap: Double
+    let peak: Double
+    if let low = tariffRates.min(), let high = tariffRates.max() {
+        (cheap, peak) = (low, high)
+    } else {
+        let edges = ((rd["applicableRates"] as? [String: Any])?["edges"] as? [[String: Any]]) ?? []
+        let values = edges.compactMap { toDouble(($0["node"] as? [String: Any])?["value"]) }
+        guard let low = values.min(), let high = values.max() else {
+            throw ApiError(message: "No rates returned")
+        }
+        (cheap, peak) = (low * vatMultiplier, high * vatMultiplier)
+    }
+    let standingCharge = toDouble(tariff["standingCharge"])
 
     let scheme = agreement["timeOfUseScheme"] as? [String: Any]
     let tz = TimeZone(identifier: scheme?["timezone"] as? String ?? "") ?? TimeZone(identifier: "Europe/London")!
@@ -164,5 +193,5 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
         // Charge level is secondary; the rate display still works without it.
     }
 
-    return Snapshot(cheapRate: cheap, peakRate: peak, windows: windows, dispatches: dispatches, cars: cars, tz: tz, fetched: now)
+    return Snapshot(cheapRate: cheap, peakRate: peak, standingCharge: standingCharge, windows: windows, dispatches: dispatches, cars: cars, tz: tz, fetched: now)
 }

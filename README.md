@@ -50,6 +50,9 @@ is normally blank.
 The standing charge is reported below the chart rather than stacked, since it is not usage. That
 means the pounds total will not match a bill on its own.
 
+All prices and costs include VAT, matching your bill. The menu bar footer shows the daily standing
+charge alongside.
+
 ### Multiple properties and meters
 
 Meters are matched to the property they actually sit at, and only those with an active agreement
@@ -67,8 +70,9 @@ OCTOPUS_API_KEY=sk_live_... python3 octopus_rate.py
 Python 3.9 or later, standard library only. Prints the current rate, next change, and each car:
 
 ```
-Now: PEAK  (28.93p/kWh)
-Next change Today 23:30 -> 6.57p/kWh
+Now: PEAK  (30.37p/kWh incl VAT)
+Standing charge 54.81p/day incl VAT
+Next change Today 23:30 -> 6.90p/kWh
 Mini Cooper: 62% (target 100%)
     Not charging · smart control not available
     Charge level as of Today 15:08

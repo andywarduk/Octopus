@@ -20,8 +20,11 @@ struct Car {
 }
 
 struct Snapshot {
+    /// Both include VAT, matching the usage chart and your bill.
     var cheapRate: Double
     var peakRate: Double
+    /// Daily standing charge in pence including VAT, when the tariff states one.
+    var standingCharge: Double?
     var windows: [(from: Int, to: Int)]  // minutes after local midnight
     var dispatches: [Interval]
     var cars: [Car]
