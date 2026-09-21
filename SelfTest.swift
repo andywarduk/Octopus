@@ -73,6 +73,19 @@ func selfTest() {
         let state = day.hasData ? formatUsage(day.total(.kwh), .kwh, withUnit: true) : "no data published"
         print("    \(formatted(day.start, "EEE d MMM", tzLondon)): \(state)")
     }
+    print("  week windows (7 days each):")
+    for back in [0, 1, 2] {
+        let w = usageDateWindow(weeksBack: back, days: 7, tz: tzLondon)
+        let last = calendar(tzLondon).date(byAdding: .day, value: -1, to: w.to)!
+        print("    \(back) weeks back: \(formatted(w.from, "EEE d MMM", tzLondon)) – \(formatted(last, "EEE d MMM", tzLondon))")
+    }
+    print("  cache freshness:")
+    let settled = CachedUsage(series: UsageSeries(), fetchedAt: date("2026-01-01T00:00:00Z"), complete: true)
+    let pending = CachedUsage(series: UsageSeries(), fetchedAt: date("2026-01-01T00:00:00Z"), complete: false)
+    let justNow = CachedUsage(series: UsageSeries(), fetchedAt: Date(), complete: false)
+    print("    settled week, fetched months ago: \(settled.isFresh())")
+    print("    incomplete week, fetched months ago: \(pending.isFresh())")
+    print("    incomplete week, fetched just now: \(justNow.isFresh())")
     print("  axis scale (max, step, ticks):")
     for value in [3.9, 2.5, 5.0, 7.4, 39.4, 59.3, 417.0, 0.3, 0.0] {
         let (top, step) = axisScale(value)

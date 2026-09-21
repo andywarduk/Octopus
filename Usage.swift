@@ -5,13 +5,14 @@
 
 import Foundation
 
-/// Stack order, bottom to top. Bands are prices, which are real. The tariff's per-device buckets
+/// Declaration order is the stack order, bottom to top: standard sits underneath, so the
+/// off-peak block on top is easy to compare night to night. Bands are prices, which are real. The tariff's per-device buckets
 /// are NOT a measurement of what each device drew — Octopus allocates a fixed amount to the EV
 /// bucket and the rest of the car's draw lands in the household bucket at the same price — so a
 /// dispatch is flagged on the period instead of being split out as its own band.
 enum RateBand: String, CaseIterable {
-    case cheap = "Off-peak"
     case standard = "Standard"
+    case cheap = "Off-peak"
 }
 
 /// One charged bucket within one half hour.
@@ -147,6 +148,20 @@ func aggregateUsage(
     return periods.values.sorted { $0.start < $1.start }
 }
 
+/// A fetched week, with enough context to know when it is worth keeping.
+struct CachedUsage {
+    var series: UsageSeries
+    var fetchedAt: Date
+    /// Every day in the window came back with data, so it can no longer change.
+    var complete: Bool
+
+    /// A settled week is kept indefinitely. One still waiting on Octopus is re-checked, since
+    /// the missing days appear later.
+    func isFresh(now: Date = Date()) -> Bool {
+        complete || now.timeIntervalSince(fetchedAt) < 15 * 60
+    }
+}
+
 // MARK: - Fetching
 
 let MEASUREMENTS_QUERY = """
@@ -164,41 +179,45 @@ let MEASUREMENTS_QUERY = """
     }
     """
 
-/// Pulls `days` local days up to the end of today, a day per request.
-func fetchUsage(apiKey: String, days: Int) async throws -> UsageSeries {
+/// The local window shown for a week offset: 0 is the week ending today, 1 the week before.
+func usageDateWindow(weeksBack: Int, days: Int, tz: TimeZone) -> (from: Date, to: Date) {
+    let cal = calendar(tz)
+    let today = cal.startOfDay(for: Date())
+    let lastDay = cal.date(byAdding: .day, value: -7 * weeksBack, to: today) ?? today
+    let from = cal.date(byAdding: .day, value: -(days - 1), to: lastDay) ?? lastDay
+    return (from, cal.date(byAdding: .day, value: 1, to: lastDay) ?? lastDay)
+}
+
+/// Pulls `days` local days, a day per request, ending `weeksBack` weeks before today.
+func fetchUsage(apiKey: String, days: Int, weeksBack: Int = 0) async throws -> UsageSeries {
     let auth = try await gql(
         "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": apiKey])
     guard let token = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String else {
         throw ApiError(message: "Login failed")
     }
-    let who = try await gql("{viewer{accounts{number}}}", token: token)
-    guard
-        let accounts = (who["viewer"] as? [String: Any])?["accounts"] as? [[String: Any]],
-        let account = accounts.first?["number"] as? String
-    else { throw ApiError(message: "No account found") }
+    let choices = try await discoverMeters(token: token)
+    guard let choice = MeterPreference.resolve(from: choices) else {
+        throw ApiError(message: "No electricity import meter found")
+    }
+    let account = choice.accountNumber
+    let mpan = choice.mpan
+    let propertyId = choice.propertyId
 
     let detail = try await gql(
         """
         query($a:String!){account(accountNumber:$a){
-          properties{id}
           electricityAgreements(active:true){
-            meterPoint{mpan direction}
+            meterPoint{mpan}
             timeOfUseScheme{timezone}
           }
         }}
         """, ["a": account], token: token)
     let acc = detail["account"] as? [String: Any] ?? [:]
-    let agreements = (acc["electricityAgreements"] as? [[String: Any]]) ?? []
-    let imports = agreements.filter {
-        (($0["meterPoint"] as? [String: Any])?["direction"] as? String)?.uppercased() != "EXPORT"
+    let agreement = ((acc["electricityAgreements"] as? [[String: Any]]) ?? []).first {
+        ($0["meterPoint"] as? [String: Any])?["mpan"] as? String == mpan
     }
-    guard
-        let agreement = imports.first,
-        let mpan = (agreement["meterPoint"] as? [String: Any])?["mpan"] as? String,
-        let propertyId = (acc["properties"] as? [[String: Any]])?.first?["id"] as? String
-    else { throw ApiError(message: "No electricity import meter found") }
 
-    let tzName = ((agreement["timeOfUseScheme"] as? [String: Any])?["timezone"] as? String) ?? "Europe/London"
+    let tzName = ((agreement?["timeOfUseScheme"] as? [String: Any])?["timezone"] as? String) ?? "Europe/London"
     let tz = TimeZone(identifier: tzName) ?? TimeZone(identifier: "Europe/London")!
     let cal = calendar(tz)
     let iso = ISO8601DateFormatter()
@@ -207,14 +226,15 @@ func fetchUsage(apiKey: String, days: Int) async throws -> UsageSeries {
 
     var buckets: [UsageBucket] = []
     var standing: [(start: Date, pence: Double)] = []
-    let today = cal.startOfDay(for: Date())
-    let windowStart = cal.date(byAdding: .day, value: -(days - 1), to: today) ?? today
-    let windowEnd = cal.date(byAdding: .day, value: 1, to: today) ?? today
+    let window = usageDateWindow(weeksBack: weeksBack, days: days, tz: tz)
+    let windowStart = window.from
+    let windowEnd = window.to
 
-    for offset in stride(from: days - 1, through: 0, by: -1) {
+    for index in 0..<days {
         guard
-            let dayStart = cal.date(byAdding: .day, value: -offset, to: today),
-            let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)
+            let dayStart = cal.date(byAdding: .day, value: index, to: windowStart),
+            let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart),
+            dayStart < windowEnd
         else { continue }
         let data = try await gql(
             MEASUREMENTS_QUERY,
@@ -250,6 +270,10 @@ func fetchUsage(apiKey: String, days: Int) async throws -> UsageSeries {
             }
         }
     }
-    guard !buckets.isEmpty else { throw ApiError(message: "No half-hourly usage came back for this period.") }
+    guard !buckets.isEmpty else {
+        throw ApiError(
+            message: "No half-hourly usage for \(choice.label) in the last \(days) days. "
+                + "Octopus publishes about two days behind, and a meter with no readings stays empty.")
+    }
     return UsageSeries(buckets: buckets, standing: standing, tz: tz, from: windowStart, to: windowEnd)
 }

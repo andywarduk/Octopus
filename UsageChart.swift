@@ -16,11 +16,12 @@ func hexColor(_ hex: String) -> NSColor {
 enum SeriesColor {
     // Categorical slots 1 and 3 for the two prices; slot 2 marks a smart charge, which sits
     // under the axis rather than in the stack because it isn't a separate price.
+    // Green reads as the cheap one, so off-peak takes the aqua slot and standard the blue.
     static let light: [RateBand: NSColor] = [
-        .cheap: hexColor("#2a78d6"), .standard: hexColor("#1baf7a"),
+        .cheap: hexColor("#1baf7a"), .standard: hexColor("#2a78d6"),
     ]
     static let dark: [RateBand: NSColor] = [
-        .cheap: hexColor("#3987e5"), .standard: hexColor("#199e70"),
+        .cheap: hexColor("#199e70"), .standard: hexColor("#3987e5"),
     ]
     static func smart(dark isDark: Bool) -> NSColor {
         isDark ? hexColor("#d95926") : hexColor("#eb6834")
@@ -67,6 +68,8 @@ final class UsageChartView: NSView {
     var periods: [UsagePeriod] = [] { didSet { needsDisplay = true } }
     var unit: UsageUnit = .kwh { didSet { needsDisplay = true } }
     var granularity: Granularity = .day { didSet { needsDisplay = true } }
+    /// Shown centred when there is nothing to plot, so the plot area is never just blank.
+    var placeholder: String? { didSet { needsDisplay = true } }
     var tz: TimeZone = .current
     private var hoverIndex: Int?
     private var plotRect: CGRect = .zero
@@ -116,7 +119,14 @@ final class UsageChartView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.set()
         dirtyRect.fill()
-        guard !periods.isEmpty else { return }
+        guard !periods.isEmpty else {
+            if let placeholder {
+                label(
+                    placeholder, at: CGPoint(x: bounds.midX, y: bounds.midY - 6), size: 12,
+                    color: .tertiaryLabelColor, align: .centre)
+            }
+            return
+        }
 
         // Top leaves room for the legend plus a cap label above a column that nearly fills the plot.
         let left: CGFloat = 52, right: CGFloat = 14, top: CGFloat = 46
@@ -402,13 +412,14 @@ final class UsageChartView: NSView {
 @MainActor
 func renderUsageChart(
     periods: [UsagePeriod], unit: UsageUnit, granularity: Granularity, dark: Bool, size: CGSize,
-    hover: Int? = nil, to path: String
+    hover: Int? = nil, placeholder: String? = nil, to path: String
 ) {
     let view = UsageChartView(frame: CGRect(origin: .zero, size: size))
     view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     view.periods = periods
     view.granularity = granularity
     view.unit = unit
+    view.placeholder = placeholder
     view.previewHover(hover)
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
     // Paint the chart surface first; the view itself draws on a clear background.

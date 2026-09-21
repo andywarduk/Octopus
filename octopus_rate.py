@@ -131,6 +131,11 @@ agreements = run(
     token,
 )["account"]["electricityAgreements"]
 imports = [x for x in agreements if str(x["meterPoint"].get("direction")).upper() != "EXPORT"]
+if not imports:
+    sys.exit("No electricity import meter found.")
+if len(imports) > 1:
+    others = ", ".join(x["meterPoint"]["mpan"] for x in imports[1:])
+    print(f"Note: account has several import meters; using {imports[0]['meterPoint']['mpan']} (also: {others})")
 agreement = imports[0]
 mpan = agreement["meterPoint"]["mpan"]
 

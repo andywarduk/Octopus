@@ -22,6 +22,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var usageFooter: NSTextField?
     var usageSeries = UsageSeries()
     var usageScale: NSSegmentedControl?
+    var meterPicker: NSPopUpButton?
+    var meterChoices: [MeterChoice] = []
+    var usageWeeksBack = 0
+    var usageBack: NSButton?
+    var usageForward: NSButton?
+    var usageRange: NSTextField?
+    var usageStatusHeight: NSLayoutConstraint?
+    /// Fetched weeks, keyed by meter and offset. A week is 7 requests, so revisiting one
+    /// should not go back to the API.
+    var usageCache: [String: CachedUsage] = [:]
     var usageGranularity: Granularity = .day
     var usageLoading = false
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock

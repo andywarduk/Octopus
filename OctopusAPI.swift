@@ -52,11 +52,12 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
         throw ApiError(message: "Login failed")
     }
 
-    let who = try await gql("{viewer{accounts{number}}}", token: token)
-    guard
-        let accounts = (who["viewer"] as? [String: Any])?["accounts"] as? [[String: Any]],
-        let account = accounts.first?["number"] as? String
-    else { throw ApiError(message: "No account found") }
+    let choices = try await discoverMeters(token: token)
+    guard let choice = MeterPreference.resolve(from: choices) else {
+        throw ApiError(message: "No electricity import meter found")
+    }
+    let account = choice.accountNumber
+    let mpan = choice.mpan
 
     let agr = try await gql(
         """
@@ -66,11 +67,12 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
         }}}
         """, ["a": account], token: token)
     let agreements = ((agr["account"] as? [String: Any])?["electricityAgreements"] as? [[String: Any]]) ?? []
-    let imports = agreements.filter {
-        (($0["meterPoint"] as? [String: Any])?["direction"] as? String)?.uppercased() != "EXPORT"
-    }
-    guard let agreement = imports.first, let mpan = (agreement["meterPoint"] as? [String: Any])?["mpan"] as? String
-    else { throw ApiError(message: "No electricity import meter found") }
+    // The agreement for this meter, not merely the first import on the account.
+    guard
+        let agreement = agreements.first(where: {
+            ($0["meterPoint"] as? [String: Any])?["mpan"] as? String == mpan
+        })
+    else { throw ApiError(message: "No active agreement for meter \(mpan)") }
 
     let now = Date()
     let iso = ISO8601DateFormatter()

@@ -36,6 +36,10 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
                 periods: series.periods(scale), unit: unit, granularity: scale, dark: dark,
                 size: CGSize(width: 604, height: 300), hover: hover, to: "\(dir)/chart-\(name).png")
         }
+        renderUsageChart(
+            periods: [], unit: .kwh, granularity: .day, dark: false,
+            size: CGSize(width: 604, height: 300), placeholder: "No usage to show",
+            to: "\(dir)/chart-empty.png")
         let hairlines = countHairlines(
             periods: series.periods(.halfHour), dark: false, size: CGSize(width: 604, height: 300))
         print("half-hour hairline pixels: \(hairlines)")

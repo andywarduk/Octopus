@@ -218,6 +218,7 @@ def main():
     parser.add_argument("--sessions", action="store_true")
     parser.add_argument("--csv")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--mpan", help="which import meter to use, if the account has several")
     parser.add_argument(
         "--peaks", type=int, metavar="N",
         help="list the N highest-usage half hours, with the implied kW and the bucket split")
@@ -234,27 +235,39 @@ def main():
 
     details = run(
         """query($a:String!){account(accountNumber:$a){
-             properties{id}
-             electricityAgreements(active:true){
-               meterPoint{mpan direction}
-               timeOfUseScheme{timezone}
-             }
+             properties{id address electricityMeterPoints{mpan direction}}
+             electricityAgreements(active:true){meterPoint{mpan} timeOfUseScheme{timezone}}
            }}""",
         {"a": account},
         token,
     )["account"]
-    imports = [
-        a for a in details["electricityAgreements"] or []
-        if str((a["meterPoint"] or {}).get("direction")).upper() != "EXPORT"
+    # Pair each property with its own meters. Taking properties[0] and the first agreement
+    # separately can name a property and an MPAN at different addresses.
+    active = {
+        (a.get("meterPoint") or {}).get("mpan"): a
+        for a in details.get("electricityAgreements") or []
+    }
+    meters = [
+        {"property": prop["id"], "address": (prop.get("address") or "").split("\n")[0],
+         "mpan": point["mpan"], "agreement": active[point["mpan"]]}
+        for prop in details.get("properties") or []
+        for point in prop.get("electricityMeterPoints") or []
+        if str(point.get("direction")).upper() != "EXPORT" and point.get("mpan") in active
     ]
-    if not imports:
-        sys.exit("No electricity import meter found.")
-    agreement = imports[0]
-    mpan = agreement["meterPoint"]["mpan"]
-    properties = details.get("properties") or []
-    if not properties:
-        sys.exit("No property found on this account.")
-    prop_id = properties[0]["id"]
+    if not meters:
+        sys.exit("No electricity import meter with an active agreement was found.")
+    if args.mpan:
+        meters = [m for m in meters if m["mpan"] == args.mpan]
+        if not meters:
+            sys.exit(f"No import meter matching MPAN {args.mpan}.")
+    if len(meters) > 1:
+        print("Several import meters on this account; showing the first. Use --mpan to choose:")
+        for m in meters:
+            print(f"  {m['mpan']}  {m['address']}")
+        print()
+    meter = meters[0]
+    mpan, prop_id, agreement = meter["mpan"], meter["property"], meter["agreement"]
+
     tz_name = (agreement.get("timeOfUseScheme") or {}).get("timezone") or "Europe/London"
     tz = ZoneInfo(tz_name)
 
@@ -273,7 +286,8 @@ def main():
 
     threshold, low, high = classify(rows)
     priced = sum(1 for r in rows if r["rate"] is not None)
-    print(f"MPAN {mpan} · {tz_name} · {len(rows)} half hours, {priced} priced")
+    where = f" · {meter['address']}" if meter["address"] else ""
+    print(f"MPAN {mpan}{where} · {tz_name} · {len(rows)} half hours, {priced} priced")
     if threshold is None and low is None:
         print("No unit rates came back, so cheap periods can't be identified. Try --debug.")
     elif threshold is None:

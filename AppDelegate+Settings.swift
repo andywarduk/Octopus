@@ -9,6 +9,8 @@ extension AppDelegate {
         setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
         removeButton?.isEnabled = apiKey != nil
         notifyCheck?.state = notifyEnabled ? .on : .off
+        refreshMeterPicker()
+        loadMeterChoices()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -31,16 +33,25 @@ extension AppDelegate {
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
 
+        let meterHeading = NSTextField(labelWithString: "Meter")
+        meterHeading.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        let picker = NSPopUpButton()
+        picker.target = self
+        picker.action = #selector(meterChanged(_:))
+        picker.addItem(withTitle: "Loading…")
+        picker.isEnabled = false
+
         let check = NSButton(
             checkboxWithTitle: "Alert 10 minutes before the cheap rate starts", target: self,
             action: #selector(toggleNotify(_:)))
         let test = NSButton(title: "Send Test Alert", target: self, action: #selector(testAlert))
 
-        let stack = NSStackView(views: [heading, keyRow, status, check, test])
+        let stack = NSStackView(views: [heading, keyRow, status, meterHeading, picker, check, test])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
         stack.setCustomSpacing(20, after: status)
+        stack.setCustomSpacing(20, after: picker)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         // Pin the stack inside a container so the 20pt margin holds on every side.
@@ -68,6 +79,53 @@ extension AppDelegate {
         keyStatus = status
         notifyCheck = check
         removeButton = remove
+        meterPicker = picker
+    }
+
+    /// Lists every import meter on the account so a multi-property account isn't guessed at.
+    func refreshMeterPicker() {
+        guard let picker = meterPicker else { return }
+        picker.removeAllItems()
+        if meterChoices.isEmpty {
+            picker.addItem(withTitle: apiKey == nil ? "Add an API key first" : "Loading…")
+            picker.isEnabled = false
+            return
+        }
+        for choice in meterChoices { picker.addItem(withTitle: choice.label) }
+        picker.isEnabled = meterChoices.count > 1
+        if let current = MeterPreference.resolve(from: meterChoices),
+            let index = meterChoices.firstIndex(of: current)
+        {
+            picker.selectItem(at: index)
+        }
+    }
+
+    @objc func meterChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard index >= 0, index < meterChoices.count else { return }
+        MeterPreference.save(meterChoices[index])
+        // Everything downstream is meter-specific, so start both over.
+        snapshot = nil
+        usageSeries = UsageSeries()
+        usageCache.removeAll()
+        usageWeeksBack = 0
+        clearUsageChart(placeholder: "Loading…")
+        refresh(manual: true)
+        if usageWindow?.isVisible == true { loadUsage() }
+    }
+
+    func loadMeterChoices() {
+        guard let key = apiKey, meterChoices.isEmpty else { return }
+        Task {
+            guard
+                let auth = try? await gql(
+                    "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": key]),
+                let token = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String,
+                let found = try? await discoverMeters(token: token)
+            else { return }
+            meterChoices = found
+            refreshMeterPicker()
+        }
     }
 
     @objc func toggleNotify(_ sender: NSButton) {
@@ -121,6 +179,8 @@ extension AppDelegate {
         }
         snapshot = nil
         lastError = nil
+        meterChoices = []
         refresh(manual: true)
+        loadMeterChoices()
     }
 }

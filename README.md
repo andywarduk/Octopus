@@ -29,9 +29,12 @@ your login Keychain, never in a file. Get the key from the API access page of yo
   - The cheap windows in the next 48 hours, including smart-charging dispatches.
 - **Alert:** a notification 10 minutes before a cheap window starts. Turn it on or off, or send a test, in Settings.
 - **Electricity Use…:** a week of use as stacked columns, switchable between kWh and pounds, and
-  between a column per day and one per half hour. Each column splits into the cheap rate,
-  smart-charge dispatches and the standard rate, taken from what each half hour was actually billed.
-  Hover a column for its breakdown. The standing charge is reported below the chart rather than
+  between a column per day and one per half hour. Columns stack by price — off-peak and standard —
+  taken from what each half hour was actually billed. A smart charge is marked under the axis rather
+  than split out of the bar: the tariff's per-device buckets are a billing allocation, not a
+  measurement of what the car drew, so treating them as a separate band overstates the household's
+  share. Hover a column for its breakdown and each band's price. Days Octopus hasn't published yet
+  show a grey dash, not an empty bar. The standing charge is reported below the chart rather than
   stacked, since it isn't usage. Switching unit or granularity re-buckets what was already fetched;
   only **Reload** goes back to the API.
 
@@ -43,6 +46,14 @@ your login Keychain, never in a file. Get the key from the API access page of yo
 - It also fetches when the menu is opened and the data is over a minute old, and from **Refresh now**.
 - After 10 consecutive failures it stops fetching and shows the error in the menu, so a bad key or an
   outage can't keep hitting the API. **Refresh now** (or saving a key) starts it again.
+
+### Multiple properties and meters
+
+The account, property and import meter are discovered as matched pairs, so a property is never
+asked for a meter that belongs to a different address. Only meters with an active agreement are
+offered. If the account has more than one, **Settings** has a picker; the choice is remembered and
+applies to both the menu bar rate and the usage chart. The scripts print a note when there is more
+than one, and `octopus_history.py --mpan` selects one.
 
 ### Notes
 
@@ -71,6 +82,7 @@ your login Keychain, never in a file. Get the key from the API access page of yo
 | `Model.swift` | `Interval`, `Car`, `Snapshot`, `Line` |
 | `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
 | `Keychain.swift` | Reading, saving and removing the API key |
+| `MeterSelection.swift` | Discovering import meters per property, and the saved choice |
 | `OctopusAPI.swift` | GraphQL calls that build a `Snapshot` |
 | `AppIcon.swift` | The app icon, drawn in code |
 | `AppDelegate.swift` | Status item, the 30-second tick, and the refresh cycle |
