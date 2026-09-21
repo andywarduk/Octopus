@@ -14,14 +14,16 @@ func hexColor(_ hex: String) -> NSColor {
 }
 
 enum SeriesColor {
-    // Categorical slots 1 and 3 for the two prices; slot 2 marks a smart charge, which sits
-    // under the axis rather than in the stack because it isn't a separate price.
     // Green reads as the cheap one, so off-peak takes the aqua slot and standard the blue.
+    // The standing charge is neutral grey on purpose: it isn't a rate, and no categorical hue
+    // separates from blue in dark mode at the bottom of the stack. Grey separates by saturation
+    // instead — it fails the palette's chroma floor by design, not by accident. Slot 2 orange
+    // marks a smart charge, which sits under the axis because it isn't a price either.
     static let light: [RateBand: NSColor] = [
-        .cheap: hexColor("#1baf7a"), .standard: hexColor("#2a78d6"),
+        .cheap: hexColor("#1baf7a"), .standard: hexColor("#2a78d6"), .standing: hexColor("#8a8a84"),
     ]
     static let dark: [RateBand: NSColor] = [
-        .cheap: hexColor("#199e70"), .standard: hexColor("#3987e5"),
+        .cheap: hexColor("#199e70"), .standard: hexColor("#3987e5"), .standing: hexColor("#9a9a92"),
     ]
     static func smart(dark isDark: Bool) -> NSColor {
         isDark ? hexColor("#d95926") : hexColor("#eb6834")
@@ -83,6 +85,9 @@ final class UsageChartView: NSView {
 
     override var isFlipped: Bool { false }
 
+    /// Bands actually drawn, which is not every case: see visibleBands.
+    private var bands: [RateBand] { visibleBands(unit, granularity) }
+
     private var isDark: Bool {
         effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
@@ -140,7 +145,7 @@ final class UsageChartView: NSView {
         let plot = CGRect(
             x: left, y: bottom, width: max(10, bounds.width - left - right),
             height: max(10, bounds.height - top - bottom))
-        let maxTotal = periods.map { $0.total(unit) }.max() ?? 1
+        let maxTotal = periods.map { $0.total(unit, bands) }.max() ?? 1
         let (axisMax, axisStep) = axisScale(maxTotal)
 
         slotWidth = plot.width / CGFloat(periods.count)
@@ -255,12 +260,12 @@ final class UsageChartView: NSView {
                 continue
             }
 
-            let bands = RateBand.allCases.filter { period.value($0, unit) > 0 }
+            let drawn = bands.filter { period.value($0, unit) > 0 }
             var y = plot.minY
-            for (position, band) in bands.enumerated() {
+            for (position, band) in drawn.enumerated() {
                 let value = period.value(band, unit)
                 let full = CGFloat(value / axisMax) * plot.height
-                let isTop = position == bands.count - 1
+                let isTop = position == drawn.count - 1
                 // The gap is taken off the top of every segment but the last, so the stack's
                 // total height still reads true against the axis.
                 let height = max(1, full - (isTop ? 0 : segmentGap))
@@ -345,7 +350,7 @@ final class UsageChartView: NSView {
         // numbers are readable as text and not only as colour.
         var x: CGFloat = 52
         let y = bounds.height - 20
-        for band in RateBand.allCases {
+        for band in bands {
             let total = periods.reduce(0) { $0 + $1.value(band, unit) }
             guard total > 0 else { continue }
             SeriesColor.of(band, dark: isDark).setFill()
@@ -365,17 +370,17 @@ final class UsageChartView: NSView {
         let heading: String
         if granularity == .day {
             heading = period.hasData
-                ? "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit), unit, withUnit: true, energyLabel: energyLabel))"
+                ? "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit, bands), unit, withUnit: true, energyLabel: energyLabel))"
                 : formatted(period.start, "EEE d MMM", tz)
         } else {
             heading = "\(formatted(period.start, "EEE d MMM HH:mm", tz))–\(formatted(period.end, "HH:mm", tz))"
-                + "  ·  \(formatUsage(period.total(unit), unit, withUnit: true, energyLabel: energyLabel))"
+                + "  ·  \(formatUsage(period.total(unit, bands), unit, withUnit: true, energyLabel: energyLabel))"
         }
         var lines = [heading]
         if !period.hasData {
             lines.append("No data yet — Octopus publishes about two days behind")
         }
-        for band in RateBand.allCases where period.value(band, unit) > 0 {
+        for band in bands where period.value(band, unit) > 0 {
             var line = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true, energyLabel: energyLabel))"
             if let price = period.price(band) { line += String(format: " @ %.2fp", price) }
             lines.append(line)
@@ -383,10 +388,7 @@ final class UsageChartView: NSView {
         if period.smartCharge {
             lines.append("Smart charge ran in this period")
         }
-        if period.hasData, period.total(unit) == 0 { lines.append("No usage") }
-        if unit == .money, granularity == .day, period.standingPence > 0 {
-            lines.append("Standing: \(formatUsage(period.standingPence, .money))")
-        }
+        if period.hasData, period.total(unit, bands) == 0 { lines.append("No usage") }
 
         let font = NSFont.systemFont(ofSize: 11)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]

@@ -11,8 +11,18 @@ import Foundation
 /// bucket and the rest of the car's draw lands in the household bucket at the same price — so a
 /// dispatch is flagged on the period instead of being split out as its own band.
 enum RateBand: String, CaseIterable {
+    /// Not a rate: a fixed daily charge. Sits at the bottom as the base the usage builds on.
+    case standing = "Standing charge"
     case standard = "Standard"
     case cheap = "Off-peak"
+
+    var isConsumption: Bool { self != .standing }
+}
+
+/// The standing charge is part of what a period costs, so it stacks whenever money is shown. It
+/// has no place on a kWh axis, where it would be energy that was never delivered.
+func visibleBands(_ unit: UsageUnit, _ granularity: Granularity) -> [RateBand] {
+    unit == .money ? RateBand.allCases : RateBand.allCases.filter(\.isConsumption)
 }
 
 /// One charged bucket within one half hour.
@@ -42,15 +52,18 @@ struct UsagePeriod {
     var hasData = false
 
     func value(_ band: RateBand, _ unit: UsageUnit) -> Double {
-        (unit == .kwh ? kwh[band] : pence[band]) ?? 0
+        // The standing charge buys no energy, so it has no place on a kWh axis.
+        if band == .standing { return unit == .money ? standingPence : 0 }
+        return (unit == .kwh ? kwh[band] : pence[band]) ?? 0
     }
 
-    func total(_ unit: UsageUnit) -> Double {
-        RateBand.allCases.reduce(0) { $0 + value($1, unit) }
+    func total(_ unit: UsageUnit, _ bands: [RateBand] = RateBand.allCases) -> Double {
+        bands.reduce(0) { $0 + value($1, unit) }
     }
 
     /// Averaged over the band's own energy, so it reads as the price actually charged.
     func price(_ band: RateBand) -> Double? {
+        guard band.isConsumption else { return nil }
         let energy = kwh[band] ?? 0
         guard energy >= 0.001, let cost = pence[band] else { return nil }
         return cost / energy
@@ -94,6 +107,14 @@ struct UsageSeries {
 
     /// Zero consumption is data, so emptiness is about readings rather than usage.
     var isEmpty: Bool { readings == 0 }
+
+    /// The granularity this meter actually reports in, which is what completeness must be judged
+    /// at: a day counts as published the moment its first half hour arrives.
+    var nativeGranularity: Granularity { supportsHalfHour ? .halfHour : .day }
+
+    /// Settled: every period the window asked for has arrived, so nothing more can turn up.
+    /// Judged per half hour, or a part-published day would look finished and be cached for good.
+    var isComplete: Bool { periods(nativeGranularity).allSatisfy(\.hasData) }
 
     func periods(_ granularity: Granularity) -> [UsagePeriod] {
         aggregateUsage(

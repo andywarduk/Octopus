@@ -25,8 +25,10 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
         let series = sampleUsageWeek(tz: .current)
         for (name, unit, scale, dark, hover) in [
             ("kwh-light", UsageUnit.kwh, Granularity.day, false, Int?.none),
+            ("money-light", .money, .day, false, nil),
             ("money-dark", .money, .day, true, nil),
             ("halfhour-light", .kwh, .halfHour, false, nil),
+            ("halfhour-money", .money, .halfHour, false, nil),
             ("halfhour-dark", .kwh, .halfHour, true, nil),
             ("tooltip-day", .kwh, .day, false, 4),
             ("tooltip-halfhour", .kwh, .halfHour, false, 4 * 48 + 27),

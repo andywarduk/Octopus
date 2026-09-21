@@ -262,8 +262,8 @@ final class UsageWindowController: NSObject {
         Task {
             do {
                 let fetched = try await fetchUsage(apiKey: key, days: 7, weeksBack: requested, fuel: fuel)
-                let complete = fetched.periods(.day).allSatisfy(\.hasData)
-                cache[key0] = CachedUsage(series: fetched, fetchedAt: Date(), complete: complete)
+                cache[key0] = CachedUsage(
+                    series: fetched, fetchedAt: Date(), complete: fetched.isComplete)
                 trimCache()
                 // The week may have been changed again while this was in flight.
                 if requested == weeksBack {
@@ -298,9 +298,10 @@ final class UsageWindowController: NSObject {
             footer?.stringValue = ""
             return
         }
-        let standing = periods.reduce(0) { $0 + $1.standingPence }
         let unit = chart?.unit ?? .kwh
-        let total = periods.reduce(0) { $0 + $1.total(unit) }
+        let standing = periods.reduce(0) { $0 + $1.standingPence }
+        let shown = visibleBands(unit, granularity)
+        let total = periods.reduce(0) { $0 + $1.total(unit, shown) }
         let label = series.energyLabel
         // Say what a bar is: per half hour, energy is half the power drawn — 7 kW reads 3.5 kWh.
         let scale =
@@ -316,7 +317,8 @@ final class UsageWindowController: NSObject {
         if !series.supportsHalfHour {
             text += " · this meter reports daily only"
         }
-        if standing > 0 {
+        // Only mention it when it isn't in the stack — in money it is, so the total covers it.
+        if standing > 0, !shown.contains(.standing) {
             text += " · standing charge \(formatUsage(standing, .money)) not shown"
         }
         footer?.stringValue = text

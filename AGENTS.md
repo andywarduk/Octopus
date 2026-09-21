@@ -172,6 +172,12 @@ should not be undone lightly:
 - Fetched weeks are cached in memory, keyed by meter and week offset. A settled week is kept
   indefinitely; one still waiting on Octopus is re-checked after 15 minutes. The current week is
   never "settled", so it always re-checks.
+- **"Settled" is judged at the granularity the meter reports in**, via `UsageSeries.isComplete`.
+  Judging it per day marks a part-published day as finished — today usually has an hour or two —
+  so the week is cached for good and the rest of the day never appears. A daily-only meter is
+  judged per day, since that is all it will ever send.
+- A fetch that returns nothing throws and is not cached, so revisiting an unpublished week costs
+  seven requests each time. Tolerable at the moment; a short-lived negative entry would fix it.
 - Automatic refreshing stops after 10 consecutive failures.
 
 Widening the window (a month, a year) multiplies requests linearly. Batch differently rather than
@@ -209,8 +215,13 @@ against real data. Treat those paths as unverified.
 
 - **Bands are prices, not devices.** The stack encodes off-peak versus standard, which is real. A
   smart charge is a marker under the axis. See the allocation note above for why.
-- **Standard sits at the bottom** of the stack, anchored to the baseline, so it can be compared
-  day to day. Off-peak floats on top.
+- **Standard sits at the bottom** of the consumption bands, anchored to the baseline, so it can be
+  compared day to day. Off-peak floats on top.
+- **The standing charge stacks below both, in money mode only**, so a column totals what the day
+  actually cost. It is neutral grey, not a categorical hue: it is not a rate, and no hue in the
+  palette separates from blue in dark mode at the bottom of a stack — violet, the closest, is
+  ΔE 1.9 for colourblind viewers. Grey separates by saturation instead and fails the chroma floor
+  deliberately. It has no place on a kWh axis, where it would be energy never delivered.
 - **The chart palette is validated**, not chosen by eye. Off-peak green `#1baf7a` / `#199e70`,
   standard blue `#2a78d6` / `#3987e5` (light/dark), smart-charge marker orange `#eb6834` /
   `#d95926`. These pass colourblind and contrast checks in both modes. Green is below 3:1 on the

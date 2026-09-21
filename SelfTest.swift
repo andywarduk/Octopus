@@ -107,6 +107,24 @@ func selfTest() {
             + "standing \(formatUsage(day.standingPence, .money))")
     }
 
+    // The standing charge is a band in money and absent in kWh.
+    print("  standing charge as a band:")
+    for day in aggregateUsage(
+        buckets, standing: [(midnight, 32.52)], tz: tzLondon, by: .day,
+        window: (midnight, midnight.addingTimeInterval(86400)))
+    {
+        for (unit, scale) in [
+            (UsageUnit.kwh, Granularity.day), (.money, .day), (.money, .halfHour),
+        ] {
+            let shown = visibleBands(unit, scale)
+            let parts = shown.filter { day.value($0, unit) > 0 }
+                .map { "\($0.rawValue) \(formatUsage(day.value($0, unit), unit))" }
+            let name = "\(unit == .kwh ? "kWh" : "money")/\(scale == .day ? "day" : "half hour")"
+            print("    \(name.padding(toLength: 16, withPad: " ", startingAt: 0)): "
+                + "\(parts.joined(separator: ", "))  total \(formatUsage(day.total(unit, shown), unit))")
+        }
+    }
+
     print("  week windows (7 days each):")
     for back in [0, 1, 2] {
         let w = usageDateWindow(weeksBack: back, days: 7, tz: tzLondon)
@@ -117,6 +135,23 @@ func selfTest() {
     print("  VAT handling:")
     for (label, exVat) in [("standard", 28.9251), ("off-peak", 6.5714)] {
         print(String(format: "    %@: %.4fp ex VAT -> %.4fp incl", label, exVat, exVat * vatMultiplier))
+    }
+
+    // A part-published day must not make the week look settled, or the rest never arrives.
+    print("  completeness:")
+    let dayStart = date("2026-09-18T23:00:00Z")   // 00:00 BST
+    let dayEnd = dayStart.addingTimeInterval(86400)
+    func series(halfHoursPublished: Int, halfHourly: Bool) -> UsageSeries {
+        UsageSeries(
+            buckets: [], standing: (0..<halfHoursPublished).map { (dayStart.addingTimeInterval(Double($0) * 1800), 0.68) },
+            tz: tzLondon, from: dayStart, to: dayEnd, supportsHalfHour: halfHourly, readings: max(1, halfHoursPublished))
+    }
+    for (label, s) in [
+        ("half-hourly, 2 of 48 published", series(halfHoursPublished: 2, halfHourly: true)),
+        ("half-hourly, all 48 published", series(halfHoursPublished: 48, halfHourly: true)),
+        ("daily meter, day published", series(halfHoursPublished: 1, halfHourly: false)),
+    ] {
+        print("    \(label): complete=\(s.isComplete)")
     }
 
     print("  cache freshness:")
