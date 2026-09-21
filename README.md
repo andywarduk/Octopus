@@ -1,119 +1,70 @@
 # Octopus
 
-Tools for checking your Octopus Energy rate (built around Intelligent Octopus Go) using the
-[Kraken GraphQL API](https://developer.octopus.energy/graphql).
+A macOS menu bar app for Octopus Energy, built around Intelligent Octopus Go. It shows whether you
+are on the cheap or standard rate right now, when that next changes, your car's charge level, and
+charts of your electricity and gas use.
 
-- **`*.swift`**: a macOS menu bar app that shows whether you're on the cheap or
-  standard rate, your car's charge level and charging status, and upcoming cheap windows.
-- **`octopus_rate.py`**: a command-line version showing the same rate, charge level and charging status.
+There are also two command-line scripts covering the same ground, for the terminal or for cron.
 
 ## Menu bar app
 
-Requires macOS 13 or later and Xcode's command line tools (`swiftc`).
+Requires macOS 13 or later and Xcode's command line tools.
 
 ```bash
 ./build.sh
 open build/OctopusMenuBar.app
 ```
 
-On first launch choose **Settings…** from the menu and paste your Octopus API key. It is stored in
-your login Keychain, never in a file. Get the key from the API access page of your Octopus dashboard.
+On first launch choose **Settings…** from the menu and paste your Octopus API key, from the API
+access page of your Octopus dashboard. It is stored in your login Keychain, never in a file.
 
 ### What it shows
 
-- **Icon:** a green filled bolt on the cheap rate, an outline bolt on the standard rate, and a warning
-  triangle if there is no data or an error.
-- **Menu:**
-  - The current rate and when it next changes.
-  - Each car's charge level, target, and charging status.
-  - The cheap windows in the next 48 hours, including smart-charging dispatches.
-- **Alert:** a notification 10 minutes before a cheap window starts. Turn it on or off, or send a test, in Settings.
-- **Electricity Use…:** a week of use as stacked columns, switchable between kWh and pounds, and
-  between a column per day and one per half hour. Columns stack by price — off-peak and standard —
-  taken from what each half hour was actually billed. A smart charge is marked under the axis rather
-  than split out of the bar: the tariff's per-device buckets are a billing allocation, not a
-  measurement of what the car drew, so treating them as a separate band overstates the household's
-  share. Hover a column for its breakdown and each band's price. Days Octopus hasn't published yet
-  show a grey dash, not an empty bar. The standing charge is reported below the chart rather than
-  stacked, since it isn't usage. Switching unit or granularity re-buckets what was already fetched;
-  only **Reload** goes back to the API.
+- **Icon:** a green filled bolt on the cheap rate, an outline bolt on the standard rate, a warning
+  triangle if there is no data or an error. Hover it for the current price.
+- **Menu:** the current rate and when it next changes, each car's charge level and charging status,
+  and the cheap windows in the next 48 hours including smart-charge dispatches.
+- **Alert:** a notification 10 minutes before a cheap window starts. Toggle it in Settings.
+- **Electricity Use… / Gas Use…:** a week of use as stacked columns.
 
-### Refreshing
+### The usage windows
 
-- The icon and cheap/standard decision are recalculated every 30 seconds from data already held.
-- Fresh data is fetched from Octopus every 5 minutes, or every 30 seconds within 3 minutes either side
-  of a rate change (cheap starting or ending).
-- It also fetches when the menu is opened and the data is over a minute old, and from **Refresh now**.
-- After 10 consecutive failures it stops fetching and shows the error in the menu, so a bad key or an
-  outage can't keep hitting the API. **Refresh now** (or saving a key) starts it again.
+Each fuel gets its own window, with its own week position and meter. Both offer:
 
-### Gas
+- **kWh or pounds**, and a column **per day or per half hour**.
+- **Week navigation.** Back and forward a week at a time; forward stops at the current week.
+  Weeks you have already looked at are remembered, so going back is instant.
+- **Hover** a column for its breakdown, each band's price, and the exact period.
 
-**Gas Use…** opens a second window with the same controls: week navigation, kWh or pounds, day or
-half hour. Gas is single-rate, so its columns are one band rather than two, and there is no
-smart-charge marker. The unit comes from the readings, since some gas meters report cubic metres
-rather than kWh. Meters that only report daily are detected — the half-hour option is disabled and
-the footer says so — because the half-hourly query comes back empty for them.
+Columns stack by **price** — off-peak and standard — based on what each half hour was actually
+billed, not on an assumed schedule. A smart charge is marked under the axis rather than split out
+of the bar, because the tariff's per-device buckets are a billing allocation rather than a
+measurement of what the car drew.
 
-The two windows are independent: separate week position, cache and meter.
+Gas is single-rate, so its columns are one band with no smart-charge marker.
+
+Days Octopus has not published yet show a grey dash rather than an empty bar — the two mean
+different things. Octopus runs roughly two days behind, so the last day or two of the current week
+is normally blank.
+
+The standing charge is reported below the chart rather than stacked, since it is not usage. That
+means the pounds total will not match a bill on its own.
 
 ### Multiple properties and meters
 
-The account, property and meter are discovered as matched pairs, so a property is never asked for
-a meter that belongs to a different address. Only meters with an active agreement are offered.
-**Settings** lists a picker per fuel, enabled when the account has more than one of that fuel; the
-choice is remembered per fuel. The electricity choice also drives the menu bar rate. The scripts
-print a note when there is more than one, `octopus_history.py --mpan` selects one, and
-`--meters` lists every electricity and gas meter on the account.
+Meters are matched to the property they actually sit at, and only those with an active agreement
+are offered. If you have more than one of a fuel, **Settings** has a picker per fuel and remembers
+your choice. The electricity choice also drives the menu bar rate.
 
-### Notes
+A usage window is only listed for a fuel you have a meter for.
 
-- The app is ad-hoc signed. The first launch may need a right-click, then Open. Each rebuild changes
-  the signature, so macOS asks again for permission to read the Keychain item; choose **Always Allow**.
-- The car's charge level is only as fresh as the last report Octopus received from the manufacturer.
-- Octopus doesn't report "plugged in" directly. Charging status is inferred from the live power
-  reading and the smart-control state.
-- The app icon is drawn in code. `build.sh` renders it into `AppIcon.icns` with `iconutil`; if that fails
-  the app still builds, but notifications use a generic icon.
-- The usage chart reads `pricePerUnit` on each half hour, so bands follow what you were billed rather
-  than an assumed schedule. Every interval lists all four tariff buckets; only the one with kWh
-  against it was charged. Amounts are in pence even though `costCurrency` says GBP.
-- `OctopusMenuBar --selftest` prints sample menus and usage banding from fixed data, without using the
-  network. `OctopusMenuBar --iconset DIR` writes the icon PNGs, and `--chartdemo DIR` renders the
-  usage chart to PNGs in both themes and units, for checking the layout without launching the app.
-  Its sample week is seeded, so the images are identical run to run; it also counts antialiased
-  seams between half-hourly bars, which should stay at zero apart from genuine gaps in the data.
-
-### Source layout
-
-`build.sh` compiles every `.swift` file in the repository root into one binary.
-
-| File | Contents |
-| --- | --- |
-| `Model.swift` | `Interval`, `Car`, `Snapshot`, `Line` |
-| `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
-| `Keychain.swift` | Reading, saving and removing the API key |
-| `MeterSelection.swift` | Fuels, discovering meters per property, and the saved choice per fuel |
-| `OctopusAPI.swift` | GraphQL calls that build a `Snapshot` |
-| `AppIcon.swift` | The app icon, drawn in code |
-| `AppDelegate.swift` | Status item, the 30-second tick, and the refresh cycle |
-| `AppDelegate+Menu.swift` | Icon state and menu building |
-| `AppDelegate+Notifications.swift` | "Cheap rate soon" alerts |
-| `AppDelegate+Settings.swift` | The Settings window |
-| `Usage.swift` | Half-hourly usage: rate bands, daily aggregation, the measurements query |
-| `UsageChart.swift` | The stacked column chart and its offscreen renderer |
-| `UsageWindowController.swift` | One usage window, instantiated per fuel |
-| `SelfTest.swift` | `--selftest` output |
-| `main.swift` | Entry point and command-line flags |
-
-## Command-line script
+### Command-line scripts
 
 ```bash
 OCTOPUS_API_KEY=sk_live_... python3 octopus_rate.py
 ```
 
-Python 3.9 or later, standard library only. It logs in, finds your account and import meter,
-and prints something like:
+Python 3.9 or later, standard library only. Prints the current rate, next change, and each car:
 
 ```
 Now: PEAK  (28.93p/kWh)
@@ -123,25 +74,31 @@ Mini Cooper: 62% (target 100%)
     Charge level as of Today 15:08
 ```
 
-Set `DEBUG=1` to also print the raw rates, tariff schedule, dispatches and devices.
+`octopus_history.py` shows which half hours were billed at the off-peak rate, day by day:
 
-## How the rate is worked out
+```bash
+OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --days 7
+OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --meters    # list meters
+```
 
-`applicableRates` returns the tariff's rate bands, but not when each one applies. So:
+### Known limitations
 
-1. The cheap and standard rates are the lowest and highest values returned.
-2. The cheap window comes from the agreement's `timeOfUseScheme`, matching slots whose name contains
-   "off", "cheap" or "night" (for example `ECO7_NIGHT`, 23:30 to 05:30). If none match, 23:30 to 05:30 is used.
-3. Smart-charging dispatches (`plannedDispatches` and `completedDispatches`) also count as cheap.
-
-## API
-
-- Endpoint: `https://api.octopus.energy/v1/graphql/`
-- Auth: exchange your API key for a token with the `obtainKrakenToken` mutation, then send the token
-  in the `Authorization` header.
-- Introspection works without logging in, so the schema can be explored in the GraphiQL page at the endpoint.
+- The app is ad-hoc signed, so the first launch may need a right-click then Open. Each rebuild
+  changes the signature, and macOS asks again for permission to read the Keychain item — choose
+  **Always Allow**.
+- The car's charge level is only as fresh as the last report Octopus received from the
+  manufacturer, which can be an hour or more old.
+- Octopus does not report whether the car is plugged in, so charging status is inferred from the
+  live power reading and the smart-control state.
+- The API cannot tell you how much of a period was the car versus the rest of the house. The
+  per-device split in the billing data is an allocation, not a measurement.
 
 ## Security
 
-Never commit or paste your API key. If it has been exposed, generate a new one in the Octopus dashboard
-and revoke the old one.
+Never commit or paste your API key. If it has been exposed, generate a new one in the Octopus
+dashboard and revoke the old one.
+
+## Contributing
+
+`AGENTS.md` has the build commands, source layout, API behaviour and the findings behind the
+design decisions above.
