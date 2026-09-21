@@ -57,7 +57,7 @@ final class UsageWindowController: NSObject {
         unitPicker.selectedSegment = 0
 
         let scale = NSSegmentedControl(
-            labels: ["Day", "Half hour"], trackingMode: .selectOne, target: self,
+            labels: ["Day", "Half Hour"], trackingMode: .selectOne, target: self,
             action: #selector(granularityChanged(_:)))
         scale.selectedSegment = 0
 

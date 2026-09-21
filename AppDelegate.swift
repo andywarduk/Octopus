@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// Dispatches get re-planned a few minutes either way, which would otherwise alert again.
     static let alertCooldown: TimeInterval = 30 * 60
     /// Consecutive failed fetches. Automatic refreshing stops at maxFailures so a bad key or a
-    /// long outage can't hammer the API; "Refresh now" clears it.
+    /// long outage can't hammer the API; "Refresh Now" clears it.
     var failures = 0
     var autoRefreshPaused = false
     var menuIsOpen = false
@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         item.menu = menu
         updateIcon()
         refresh()
+        // Needed by the menu, so don't wait for Settings to be opened.
+        loadMeterChoices()
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -65,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if now.timeIntervalSince(snapshot?.fetched ?? .distantPast) >= fetchInterval(recent, now: now) - 5 { refresh() }
     }
 
-    /// - Parameter manual: true for "Refresh now" and after a key change, which resumes automatic
+    /// - Parameter manual: true for "Refresh Now" and after a key change, which resumes automatic
     ///   refreshing if it has stopped.
     func refresh(manual: Bool = false) {
         guard !loading else { return }
@@ -90,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 failures += 1
                 if failures >= Self.maxFailures {
                     autoRefreshPaused = true
-                    lastError = "\(error.localizedDescription) — stopped after \(Self.maxFailures) failed attempts. Choose Refresh now to try again."
+                    lastError = "\(error.localizedDescription) — stopped after \(Self.maxFailures) failed attempts. Choose Refresh Now to try again."
                 } else {
                     lastError = error.localizedDescription
                 }
@@ -101,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
     }
 
+
+    /// Unknown until discovery runs, and an unknown fuel is shown rather than hidden.
+    func hasMeters(_ fuel: Fuel) -> Bool {
+        meterChoices.isEmpty || meterChoices.contains { $0.fuel == fuel }
+    }
 
     @objc func showUsage() { usageControllers[.electricity]?.show() }
 

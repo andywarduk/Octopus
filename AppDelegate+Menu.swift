@@ -83,13 +83,14 @@ extension AppDelegate {
             menu.addItem(infoItem("⚠︎ \(e)", font: .menuFont(ofSize: 0), color: .labelColor))
         }
         menu.addItem(.separator())
-        for (title, action, key) in [
-            ("Refresh now", #selector(refreshNow), "r"),
-            ("Electricity Use…", #selector(showUsage), "u"),
-            ("Gas Use…", #selector(showGasUsage), "g"),
-            ("Settings…", #selector(showSettings), ","),
-            ("Quit", #selector(quit), "q"),
-        ] {
+        // A usage window is only offered for a fuel the account actually has. Until discovery
+        // finishes both are shown, since hiding them on "not known yet" would be wrong.
+        var items: [(String, Selector, String)] = [("Refresh Now", #selector(refreshNow), "r")]
+        if hasMeters(.electricity) { items.append(("Electricity Use…", #selector(showUsage), "u")) }
+        if hasMeters(.gas) { items.append(("Gas Use…", #selector(showGasUsage), "g")) }
+        items.append(("Settings…", #selector(showSettings), ","))
+        items.append(("Quit", #selector(quit), "q"))
+        for (title, action, key) in items {
             let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
             mi.target = self
             menu.addItem(mi)

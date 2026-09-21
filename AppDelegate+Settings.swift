@@ -16,7 +16,7 @@ extension AppDelegate {
     }
 
     func buildSettingsWindow() {
-        let heading = NSTextField(labelWithString: "Octopus API key")
+        let heading = NSTextField(labelWithString: "Octopus API Key")
         heading.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
 
         let field = NSSecureTextField()
@@ -132,6 +132,8 @@ extension AppDelegate {
         }
     }
 
+    /// Also called at launch, before the Settings window exists: the menu needs to know which
+    /// fuels the account has.
     func loadMeterChoices() {
         guard let key = apiKey, meterChoices.isEmpty else { return }
         Task {
