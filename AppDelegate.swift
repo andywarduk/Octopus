@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var keyStatus: NSTextField?
     var notifyCheck: NSButton?
     var dispatchCheck_: NSButton?
+    var tariffCheck: NSButton?
     var removeButton: NSButton?
     lazy var usageControllers: [Fuel: UsageWindowController] = Dictionary(
         uniqueKeysWithValues: Fuel.allCases.map {
@@ -36,6 +37,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     static let dispatchCooldown: TimeInterval = 10 * 60
     var dispatchAlertEnabled: Bool {
         UserDefaults.standard.object(forKey: "notifyDispatchChange") as? Bool ?? true
+    }
+    var tariffAlertEnabled: Bool {
+        UserDefaults.standard.object(forKey: "notifyTariffEnding") as? Bool ?? true
+    }
+    /// The tightest threshold already announced per agreement. Persisted, because the alert is
+    /// once per threshold over two months and a relaunch must not start that over.
+    var tariffAlerted: [String: Int] {
+        get { UserDefaults.standard.dictionary(forKey: "tariffAlerted") as? [String: Int] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "tariffAlerted") }
     }
     /// Consecutive failed fetches. Automatic refreshing stops at maxFailures so a bad key or a
     /// long outage can't hammer the API; "Refresh Now" clears it.
@@ -108,8 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 snapshot = try await fetchSnapshot(apiKey: key)
                 lastError = nil
                 failures = 0
-                if let previous, let current = snapshot {
-                    checkDispatchChange(from: previous, to: current)
+                if let current = snapshot {
+                    if let previous { checkDispatchChange(from: previous, to: current) }
+                    // Unlike a dispatch change this needs no comparison, so it runs on the first
+                    // fetch too — an expiry a fortnight away shouldn't wait for a second refresh.
+                    checkTariffEnding(current)
                 }
             } catch {
                 failures += 1

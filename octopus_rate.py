@@ -59,6 +59,68 @@ def stamp(when, now_local):
     return f"{day_label(when, now_local)} {when:%H:%M}"
 
 
+# datetime.weekday() is 0 for Monday, which is the order Octopus names its schedule days in.
+WEEKDAY_NAMES = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+
+
+def todays_charge_goal(preferences, now_local):
+    """Today's target state of charge and the time it should be reached by.
+
+    `chargingPreferences` is deprecated in favour of `preferences`, which is also the only one
+    carrying the ready-by time. The schedule is per day of week and its times are local.
+    """
+    if not preferences:
+        return None, None
+    schedules = preferences.get("schedules") or []
+    today = WEEKDAY_NAMES[now_local.weekday()]
+    match = next(
+        (s for s in schedules if str(s.get("dayOfWeek", "")).upper() == today),
+        schedules[0] if schedules else None,
+    )
+    if not match:
+        return None, None
+    # Only a percentage is a state of charge. The same field can hold a kWh or mileage goal, and
+    # printing one of those with a % after it would be a plain lie.
+    is_percentage = str(preferences.get("unit", "")).upper() == "PERCENTAGE"
+    value = to_float(match.get("max"))
+    if value is None:
+        value = to_float(match.get("upperLimit"))
+    ready = match.get("time")
+    return (
+        round(value) if is_percentage and value is not None else None,
+        ready[:5] if isinstance(ready, str) else None,
+    )
+
+
+def tariff_ends(account_node, now):
+    """Fixed agreements that haven't ended, soonest first.
+
+    An agreement with no `validTo` is a variable tariff and never runs out. One that hasn't
+    started yet is the replacement, not the expiry. Two meters on the same tariff ending the same
+    day are one thing to be told about, so they collapse.
+    """
+    found = {}
+    for prop in account_node.get("properties") or []:
+        for field, fuel in (("electricityMeterPoints", "electricity"), ("gasMeterPoints", "gas")):
+            for point in prop.get(field) or []:
+                for agreement in point.get("agreements") or []:
+                    if agreement.get("isRevoked") or not agreement.get("validTo"):
+                        continue
+                    ends = parse(agreement["validTo"])
+                    if ends <= now:
+                        continue
+                    if agreement.get("validFrom") and parse(agreement["validFrom"]) > now:
+                        continue
+                    name = (agreement.get("tariff") or {}).get("displayName") or f"{fuel} tariff"
+                    found[(fuel, name, ends)] = (fuel, name, ends)
+    return sorted(found.values(), key=lambda row: row[2])
+
+
+def balance_text(pence):
+    """Octopus states a balance as positive when you're in credit, so the sign carries meaning."""
+    return f"£{abs(pence) / 100:.2f} {'owed' if pence < 0 else 'in credit'}"
+
+
 def charging_status(status, now):
     """Octopus doesn't report "plugged in", so infer charging from live power and smart-control state."""
     state = status.get("currentState") or ""
@@ -123,22 +185,33 @@ token = run(
 account = run("{viewer{accounts{number}}}", token=token)["viewer"]["accounts"][0]["number"]
 
 # The tariff states VAT-inclusive rates by name; applicableRates quotes them before tax.
-agreements = run(
-    """query($a:String!){account(accountNumber:$a){electricityAgreements(active:true){
-      meterPoint{mpan direction}
-      timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
-      tariff{
-        __typename
-        ... on StandardTariff{unitRate standingCharge}
-        ... on PrepayTariff{unitRate standingCharge}
-        ... on DayNightTariff{dayRate nightRate standingCharge}
-        ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
-        ... on FourRateEvTariff{dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge}
+# Balance and agreement end dates hang off the same account node, so they ride along here rather
+# than costing another request.
+account_node = run(
+    """query($a:String!){account(accountNumber:$a){
+      balance
+      projectedBalance
+      electricityAgreements(active:true){
+        meterPoint{mpan direction}
+        timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
+        tariff{
+          __typename
+          ... on StandardTariff{unitRate standingCharge}
+          ... on PrepayTariff{unitRate standingCharge}
+          ... on DayNightTariff{dayRate nightRate standingCharge}
+          ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
+          ... on FourRateEvTariff{dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge}
+        }
       }
-    }}}""",
+      properties{
+        electricityMeterPoints{agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}}
+        gasMeterPoints{agreements{validFrom validTo tariff{... on TariffType{displayName}}}}
+      }
+    }}""",
     {"a": account},
     token,
-)["account"]["electricityAgreements"]
+)["account"]
+agreements = account_node["electricityAgreements"]
 imports = [x for x in agreements if str(x["meterPoint"].get("direction")).upper() != "EXPORT"]
 if not imports:
     sys.exit("No electricity import meter found.")
@@ -208,7 +281,8 @@ if not windows:
 
 dispatches = (data["plannedDispatches"] or []) + (data["completedDispatches"] or [])
 if DEBUG:
-    print("rates:", values)
+    # Whichever source the rates came from; `values` only exists on the fallback path.
+    print("rates:", tariff_rates or values)
     print("schedule:", json.dumps(scheme))
     print("windows:", [(a.isoformat(), b.isoformat()) for a, b in windows], f"({source})")
     for d in dispatches:
@@ -244,7 +318,7 @@ DEVICES_QUERY = """query($a:String!){devices(accountNumber:$a){
   ... on SmartFlexVehicle{
     make model
     status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
-    chargingPreferences{weekdayTargetSoc weekendTargetSoc}
+    preferences{unit schedules{dayOfWeek time max upperLimit}}
   }
   ... on SmartFlexChargePoint{
     status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
@@ -259,7 +333,6 @@ except RuntimeError as exc:
 if DEBUG:
     print("devices:", json.dumps(devices))
 
-weekend = now_local.weekday() >= 5
 for dev in devices:
     status = dev.get("status") or {}
     soc = status.get("stateOfCharge") or {}
@@ -273,13 +346,33 @@ for dev in devices:
         print(f"{label}: no charge level reported")
         continue
     line = f"{label}: {value:.0f}%"
-    prefs = dev.get("chargingPreferences")
-    if prefs:
-        target = prefs["weekendTargetSoc" if weekend else "weekdayTargetSoc"]
-        line += f" (target {target}%)"
+    target, ready_by = todays_charge_goal(dev.get("preferences"), now_local)
+    if target is not None:
+        line += f" (target {target}%" + (f" by {ready_by})" if ready_by else ")")
     print(line)
     state = charging_status(status, now)
     if state:
         print(f"    {state}")
     if soc.get("timestamp"):
         print(f"    Charge level as of {stamp(parse(soc['timestamp']).astimezone(tz), now_local)}")
+
+# Balance and anything about to expire, last — same order as the app's menu.
+balance = account_node.get("balance")
+if balance is not None:
+    line = f"Balance {balance_text(balance)}"
+    projected = account_node.get("projectedBalance")
+    if projected is not None:
+        line += f" · {balance_text(projected)} expected in a year"
+    print(line)
+
+# How far ahead an ending tariff is worth mentioning.
+NOTICE_DAYS = 60
+for fuel, name, ends in tariff_ends(account_node, now):
+    # validTo is the instant cover stops, and these end at midnight — so the raw date is the first
+    # day of the next tariff. Step back a second for the last day actually covered.
+    last = (ends - timedelta(seconds=1)).astimezone(tz)
+    days = (last.date() - now_local.date()).days
+    if days > NOTICE_DAYS:
+        continue
+    when = "today" if days <= 0 else "tomorrow" if days == 1 else f"in {days} days"
+    print(f"{name} ({fuel}) ends {last:%a} {last.day} {last:%b} — {when}")

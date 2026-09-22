@@ -9,9 +9,14 @@ func selfTest() {
         cheapRate: 6.8999, peakRate: 30.3714, standingCharge: 54.81, windows: fallbackWindows,
         dispatches: [Interval(start: date("2026-09-20T12:00:00Z"), end: date("2026-09-20T13:30:00Z"), smart: true)],
         cars: [
-            Car(name: "Mini Cooper", soc: 62, target: 100, state: "SMART_CONTROL_NOT_AVAILABLE", asOf: date("2026-09-19T14:08:36Z")),
+            Car(name: "Mini Cooper", soc: 62, target: 80, readyBy: 7 * 60,
+                state: "SMART_CONTROL_NOT_AVAILABLE", asOf: date("2026-09-19T14:08:36Z")),
             Car(name: "Test EV", soc: 45, target: 80, state: "SMART_CONTROL_IN_PROGRESS", asOf: date("2026-09-19T15:10:00Z"),
                 powerKw: 7.2, powerAsOf: date("2026-09-19T15:10:00Z")),
+        ],
+        balancePence: 53206, projectedBalancePence: 71062,
+        tariffEnds: [
+            TariffEnd(fuel: .gas, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"))
         ],
         tz: tz, fetched: date("2026-09-19T15:13:00Z"))
     let then = date("2026-09-19T15:10:00Z")
@@ -156,6 +161,90 @@ func selfTest() {
         let change = dispatchChange(from: old, to: new, tz: tzLondon)
         print("    \(label.padding(toLength: 16, withPad: " ", startingAt: 0)): "
             + (change.map { "\($0.title) — \($0.body)" } ?? "no alert"))
+    }
+
+    print("  tariff end dates:")
+    // Shapes that must not become an expiry: no end date at all (a variable tariff), one that has
+    // already passed, a revoked agreement, and one that hasn't started yet.
+    let accountNode: [String: Any] = [
+        "properties": [
+            [
+                "electricityMeterPoints": [
+                    ["agreements": [
+                        ["validFrom": "2026-08-23T23:00:00+00:00", "validTo": NSNull(),
+                         "tariff": ["displayName": "Intelligent Octopus Go"]],
+                    ]],
+                    ["agreements": [
+                        ["validFrom": "2025-10-08T23:00:00+00:00", "validTo": "2026-10-08T23:00:00+00:00",
+                         "tariff": ["displayName": "Octopus 12M Fixed"]],
+                        ["validFrom": "2026-10-08T23:00:00+00:00", "validTo": "2027-10-08T23:00:00+00:00",
+                         "tariff": ["displayName": "Next Year Fixed"]],
+                        ["validFrom": "2024-01-01T00:00:00+00:00", "validTo": "2025-01-01T00:00:00+00:00",
+                         "tariff": ["displayName": "Expired Fixed"]],
+                        ["validFrom": "2025-10-08T23:00:00+00:00", "validTo": "2026-11-01T00:00:00+00:00",
+                         "isRevoked": true, "tariff": ["displayName": "Revoked Fixed"]],
+                    ]],
+                ],
+                // Two gas meters on the same tariff ending the same day: one thing to say.
+                "gasMeterPoints": [
+                    ["agreements": [
+                        ["validFrom": "2025-10-08T23:00:00+00:00", "validTo": "2026-10-08T23:00:00+00:00",
+                         "tariff": ["displayName": "Octopus 12M Fixed"]]
+                    ]],
+                    ["agreements": [
+                        ["validFrom": "2025-10-08T23:00:00+00:00", "validTo": "2026-10-08T23:00:00+00:00",
+                         "tariff": ["displayName": "Octopus 12M Fixed"]]
+                    ]],
+                ],
+            ]
+        ]
+    ]
+    let parsedEnds = parseTariffEnds(accountNode, now: date("2026-09-22T12:00:00Z"))
+    for end in parsedEnds {
+        // The raw instant is midnight, so the last covered day is the one before it.
+        let last = lastCoveredDay(end, tzLondon)
+        print("    \(end.fuel.rawValue) \(end.name) -> validTo \(formatted(end.ends, "EEE d MMM HH:mm", tzLondon)), "
+            + "last day \(formatted(last, "EEE d MMM yyyy", tzLondon)) "
+            + "(\(daysUntil(last, now: date("2026-09-22T12:00:00Z"), tzLondon)) days)")
+    }
+    print("    shown within \(tariffNoticePeriod) days: "
+        + "\(endingSoon(parsedEnds, now: date("2026-09-22T12:00:00Z"), tz: tzLondon).count) of \(parsedEnds.count)")
+
+    print("  tariff alert thresholds (daysLeft, already alerted -> new alert):")
+    for (days, alerted) in [(45, nil), (30, nil), (16, 30), (16, nil), (14, 30), (7, 14), (1, 7), (0, 1), (0, nil)]
+        as [(Int, Int?)]
+    {
+        let result = tariffAlertThreshold(daysLeft: days, alerted: alerted)
+        print("    \(String(days).padding(toLength: 3, withPad: " ", startingAt: 0)) days, "
+            + "alerted \(alerted.map(String.init) ?? "never") -> "
+            + (result.map { "alert at \($0)" } ?? "silent"))
+    }
+
+    print("  charge goal from the SmartFlex schedule:")
+    func schedule(_ day: String, _ time: String, _ max: Any) -> [String: Any] {
+        ["dayOfWeek": day, "time": time, "max": max, "upperLimit": max]
+    }
+    let saturday = date("2026-09-19T15:13:00Z")
+    for (label, prefs) in [
+        ("percentage, every day 07:00/80",
+         ["unit": "PERCENTAGE", "schedules": ["SATURDAY", "SUNDAY"].map { schedule($0, "07:00:00", 80.0) }]),
+        ("percentage, weekend differs",
+         ["unit": "PERCENTAGE", "schedules": [schedule("SATURDAY", "09:30:00", 90.0), schedule("MONDAY", "07:00:00", 80.0)]]),
+        // A kWh or mileage goal is not a state of charge and must not gain a % sign.
+        ("kilowatt-hour target", ["unit": "KILOWATT_HOUR", "schedules": [schedule("SATURDAY", "07:00:00", 40.0)]]),
+        ("no schedules", ["unit": "PERCENTAGE", "schedules": []]),
+    ] as [(String, [String: Any])] {
+        let goal = todaysChargeGoal(prefs, now: saturday, tz: tzLondon)
+        print("    \(label.padding(toLength: 30, withPad: " ", startingAt: 0)): "
+            + "target \(goal.target.map { "\($0)%" } ?? "none"), "
+            + "ready by \(goal.readyBy.map(clockTime) ?? "unknown")")
+    }
+    print("    no preferences at all: "
+        + "\(todaysChargeGoal(nil, now: saturday, tz: tzLondon).readyBy.map(clockTime) ?? "unknown")")
+
+    print("  balance wording:")
+    for value in [53206, 71062, 0, -1250] {
+        print("    \(value)p -> \(balanceText(value))")
     }
 
     print("  completeness:")

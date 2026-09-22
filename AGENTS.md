@@ -42,7 +42,8 @@ visible.
 There is no unit-test target. `--selftest` is the test suite; extend it rather than adding one. It
 currently covers charging-status wording, band assignment and thresholds (including a single-rate
 tariff), both reading shapes, unpublished days, zero-usage days, week windows, cache freshness,
-axis steps, and the menu text at three moments.
+axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge goal, balance
+wording, and the menu text at three moments.
 
 ### Verifying UI changes without a display
 
@@ -160,7 +161,15 @@ These were all found the hard way; each one produced a plausible-looking wrong a
 - **`SmartFlexVehicleChargingPreferences` is declared but implemented by nothing.** The live type
   behind `SmartFlexVehicle.preferences` is `SmartFlexDevicePreferences`: `targetType`, `unit`,
   `mode` and a `schedules` array of `{dayOfWeek, time, min, max, upperLimit}`. Times are local, so
-  a 07:00 ready-by shows as an 06:00Z session end in summer.
+  a 07:00 ready-by shows as an 06:00Z session end in summer. Check `unit` before printing a
+  percentage — the same field can hold a kWh or mileage goal.
+- **Introspection hides deprecated fields.** `SmartFlexVehicle.chargingPreferences` is absent from
+  a plain `__type(...){fields{name}}` yet still answers queries; it is deprecated in favour of
+  `preferences`. Pass `fields(includeDeprecated:true)` before concluding a field the code already
+  uses has been removed.
+- **An agreement's `validTo` is the instant cover stops, not its last day.** These end at
+  midnight, so the raw date is the first day of the *next* tariff and quoting it puts the end a
+  day late. `lastCoveredDay` steps back a second.
 - **`chargingSessions.energyAdded` is sometimes impossible.** Four of five sessions matched
   `stateOfChargeChange` × `vehicleBatterySize` to within charging losses; the fifth reported
   76.35 kWh for a 20% change on a 49.2 kWh battery, which also exceeds what 7 kW could deliver in
@@ -234,7 +243,9 @@ against real data. Treat those paths as unverified.
   unidentified-developer warning on another Mac.
 - **The Python scripts duplicate** auth, meter selection and banding rather than sharing a module.
   Deliberate — they are meant to stay single-file and dependency-free — but it means a fix in the
-  app does not reach them. `octopus_rate.py` in particular lags the app's logic.
+  app does not reach them. `octopus_rate.py` was brought back into line with the app when balance,
+  tariff-end and charge-goal reporting were added; it has no self-test, so its logic is only as
+  good as the last time someone checked it against the Swift.
 - **The usage cache is in memory only**, so a relaunch refetches. Persisting settled weeks would
   need invalidation on a tariff change.
 
@@ -268,6 +279,22 @@ against real data. Treat those paths as unverified.
   PNGs show the worst case rather than what a Retina screen shows.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
+- **Menu order is current rate, upcoming cheap rate, cars, account, footer**, then the action
+  items: Electricity Use…, Gas Use…, Refresh Now, Settings…, Quit. The informational sections come
+  from `menuLines`, which `--selftest` prints at three moments; the action items are built in
+  `rebuildMenu` and are not covered by any test, so check those in the running app.
+  A single-rate tariff skips the upcoming-cheap section rather than showing it empty — that used
+  to be an early return, which forced the section to be last, and is now an `if` so the order is
+  free to change.
+- **`octopus_rate.py` mirrors the same order** and the same agreement and charge-goal rules. It
+  shares no code with the app, so a change to one is a change to make twice.
+- **Balance and agreement dates ride on the tariff request.** Both hang off the same `account`
+  node, so folding them into the existing query costs no extra request. Do not split them out.
+- **Tariff-end alerts fire once per threshold** (30, 14, 7, 1 days), with the tightest threshold
+  reached recorded per agreement in `UserDefaults` so a relaunch doesn't repeat them. Alerting
+  daily for two months would train you to ignore it. The record is pruned only when a fetch
+  actually returned agreements, since an empty list after a failure would wipe it and re-alert
+  everything.
 - **Dispatch alerts match slots within a five-minute tolerance** rather than comparing lists.
   Octopus re-plans by a minute or two on almost every fetch, so an exact comparison alerts several
   times an hour. Only future dispatches count; completed ones are history and churn. A ten-minute

@@ -10,6 +10,7 @@ extension AppDelegate {
         removeButton?.isEnabled = apiKey != nil
         notifyCheck?.state = notifyEnabled ? .on : .off
         dispatchCheck_?.state = dispatchAlertEnabled ? .on : .off
+        tariffCheck?.state = tariffAlertEnabled ? .on : .off
         refreshMeterPicker()
         loadMeterChoices()
         NSApp.activate(ignoringOtherApps: true)
@@ -62,10 +63,14 @@ extension AppDelegate {
         let dispatchCheck = NSButton(
             checkboxWithTitle: "Alert when the smart-charge plan changes", target: self,
             action: #selector(toggleDispatchNotify(_:)))
+        let tariffEndCheck = NSButton(
+            checkboxWithTitle: "Alert before a fixed tariff ends", target: self,
+            action: #selector(toggleTariffNotify(_:)))
 
         let test = NSButton(title: "Send Test Alert", target: self, action: #selector(testAlert))
 
-        let stack = NSStackView(views: [heading, keyRow, status] + meterRows + [check, dispatchCheck, test])
+        let stack = NSStackView(
+            views: [heading, keyRow, status] + meterRows + [check, dispatchCheck, tariffEndCheck, test])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -98,6 +103,7 @@ extension AppDelegate {
         keyStatus = status
         notifyCheck = check
         dispatchCheck_ = dispatchCheck
+        tariffCheck = tariffEndCheck
         removeButton = remove
     }
 
@@ -156,6 +162,10 @@ extension AppDelegate {
 
     @objc func toggleDispatchNotify(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "notifyDispatchChange")
+    }
+
+    @objc func toggleTariffNotify(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "notifyTariffEnding")
     }
 
     @objc func toggleNotify(_ sender: NSButton) {

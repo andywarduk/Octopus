@@ -29,12 +29,14 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
 
 - **Icon:** a green filled bolt on the cheap rate, an outline bolt on the standard rate, a warning
   triangle if there is no data or an error. Hover it for the current price.
-- **Menu:** the current rate and when it next changes, each car's charge level and charging status,
-  and the cheap windows in the next 48 hours including smart-charge dispatches.
-- **Alerts:** a notification 10 minutes before a cheap window starts, and another when the
+- **Menu:** the current rate and when it next changes, each car's charge level, charging status and
+  today's charging goal, your account balance, any fixed tariff about to end, and the cheap windows
+  in the next 48 hours including smart-charge dispatches.
+- **Alerts:** a notification 10 minutes before a cheap window starts, another when the
   smart-charge plan changes — a slot added, dropped, moved by more than five minutes, or cancelled
-  altogether. Octopus nudges dispatches by a minute or two constantly, and those are ignored.
-  Both can be turned off in Settings.
+  altogether — and one as a fixed tariff nears its end, at 30 days, 14, 7 and the day before.
+  Octopus nudges dispatches by a minute or two constantly, and those are ignored. All three can be
+  turned off in Settings.
 - **Electricity Use… / Gas Use…:** a week of use as stacked columns.
 
 ### The usage windows
@@ -62,6 +64,17 @@ actually cost. It is left out of the kWh view, where it would be energy that was
 
 All prices and costs include VAT, matching your bill.
 
+### Balance and tariff end dates
+
+The menu shows your account balance and the balance Octopus expects in a year's time — its own
+projection, not a calculation of ours. A growing credit means your direct debit is running ahead of
+what you use.
+
+A fixed agreement is listed once it is within 60 days of its end, with the last day it covers.
+Octopus states the end as the instant cover stops, which is midnight, so the date shown is the day
+before that instant — the last day you are actually on that tariff. Variable tariffs have no end
+date and are never listed.
+
 ### Multiple properties and meters
 
 Meters are matched to the property they actually sit at, and only those with an active agreement
@@ -79,12 +92,14 @@ OCTOPUS_API_KEY=sk_live_... python3 octopus_rate.py
 Python 3.9 or later, standard library only. Prints the current rate, next change, and each car:
 
 ```
-Now: PEAK  (30.37p/kWh incl VAT)
 Standing charge 54.81p/day incl VAT
+Now: PEAK  (30.37p/kWh incl VAT)
 Next change Today 23:30 -> 6.90p/kWh
-Mini Cooper: 62% (target 100%)
+Mini Cooper: 62% (target 80% by 07:00)
     Not charging · smart control not available
     Charge level as of Today 15:08
+Balance £532.06 in credit · £710.62 in credit expected in a year
+Octopus 12M Fixed (gas) ends Thu 8 Oct — in 16 days
 ```
 
 `octopus_history.py` shows which half hours were billed at the off-peak rate, day by day:

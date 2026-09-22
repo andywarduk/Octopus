@@ -45,6 +45,53 @@ func gql(_ query: String, _ variables: [String: Any] = [:], token: String? = nil
 
 let fallbackWindows = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
 
+/// Fixed agreements on the account that haven't ended, soonest first.
+///
+/// Takes the raw `account` node so it can be exercised without the network. Agreements with no
+/// `validTo` are variable tariffs that never run out, and are not included. Two meters on the same
+/// tariff ending the same day collapse into one entry — that is one thing to be told about.
+func parseTariffEnds(_ account: [String: Any], now: Date) -> [TariffEnd] {
+    var found: [String: TariffEnd] = [:]
+    for property in (account["properties"] as? [[String: Any]]) ?? [] {
+        for (field, fuel) in [("electricityMeterPoints", Fuel.electricity), ("gasMeterPoints", .gas)] {
+            for point in (property[field] as? [[String: Any]]) ?? [] {
+                for agreement in (point["agreements"] as? [[String: Any]]) ?? [] {
+                    guard
+                        agreement["isRevoked"] as? Bool != true,
+                        let ends = parseDate(agreement["validTo"]), ends > now,
+                        // An agreement that hasn't started yet is the replacement, not the expiry.
+                        parseDate(agreement["validFrom"]).map({ $0 <= now }) ?? true
+                    else { continue }
+                    let name = (agreement["tariff"] as? [String: Any])?["displayName"] as? String
+                    let end = TariffEnd(fuel: fuel, name: name ?? "\(fuel.title) tariff", ends: ends)
+                    found[end.key] = end
+                }
+            }
+        }
+    }
+    return found.values.sorted { $0.ends < $1.ends }
+}
+
+/// Today's charging goal: the target state of charge and the time it should be reached by.
+///
+/// `SmartFlexVehicle.chargingPreferences` is deprecated in favour of `preferences`, which is also
+/// the only one that carries the ready-by time. The schedule is per day of week; times are local.
+func todaysChargeGoal(_ preferences: [String: Any]?, now: Date, tz: TimeZone) -> (target: Int?, readyBy: Int?) {
+    guard let preferences else { return (nil, nil) }
+    let schedules = (preferences["schedules"] as? [[String: Any]]) ?? []
+    let names = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"]
+    let today = names[(calendar(tz).component(.weekday, from: now) - 1) % 7]
+    guard
+        let schedule = schedules.first(where: { ($0["dayOfWeek"] as? String)?.uppercased() == today })
+            ?? schedules.first
+    else { return (nil, nil) }
+    // Only a percentage is a state of charge. The same field can hold a kWh or a mileage goal,
+    // and printing one of those with a % after it would be a plain lie.
+    let isPercentage = (preferences["unit"] as? String)?.uppercased() == "PERCENTAGE"
+    let value = toDouble(schedule["max"]) ?? toDouble(schedule["upperLimit"])
+    return (isPercentage ? value.map { Int($0.rounded()) } : nil, minutes(schedule["time"] as? String ?? ""))
+}
+
 func fetchSnapshot(apiKey: String) async throws -> Snapshot {
     let auth = try await gql(
         "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": apiKey])
@@ -61,24 +108,39 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
 
     // The tariff's own rates include VAT and come named, so there is no guessing which is cheap.
     // applicableRates excludes VAT and only gives a set of values, so it is the fallback.
+    // Balance and agreement end dates hang off the same `account` node as the tariff, so they
+    // ride along on this request rather than costing another one.
     let agr = try await gql(
         """
-        query($a:String!){account(accountNumber:$a){electricityAgreements(active:true){
-          meterPoint{mpan direction}
-          timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
-          tariff{
-            __typename
-            ... on StandardTariff{unitRate standingCharge}
-            ... on PrepayTariff{unitRate standingCharge}
-            ... on DayNightTariff{dayRate nightRate standingCharge}
-            ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
-            ... on FourRateEvTariff{
-              dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge
+        query($a:String!){account(accountNumber:$a){
+          balance
+          projectedBalance
+          electricityAgreements(active:true){
+            meterPoint{mpan direction}
+            timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
+            tariff{
+              __typename
+              ... on StandardTariff{unitRate standingCharge}
+              ... on PrepayTariff{unitRate standingCharge}
+              ... on DayNightTariff{dayRate nightRate standingCharge}
+              ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
+              ... on FourRateEvTariff{
+                dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge
+              }
             }
           }
-        }}}
+          properties{
+            electricityMeterPoints{
+              agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
+            }
+            gasMeterPoints{
+              agreements{validFrom validTo tariff{... on TariffType{displayName}}}
+            }
+          }
+        }}
         """, ["a": account], token: token)
-    let agreements = ((agr["account"] as? [String: Any])?["electricityAgreements"] as? [[String: Any]]) ?? []
+    let accountNode = agr["account"] as? [String: Any] ?? [:]
+    let agreements = (accountNode["electricityAgreements"] as? [[String: Any]]) ?? []
     // The agreement for this meter, not merely the first import on the account.
     guard
         let agreement = agreements.first(where: {
@@ -162,27 +224,27 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
               ... on SmartFlexVehicle{
                 make model
                 status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
-                chargingPreferences{weekdayTargetSoc weekendTargetSoc}
+                preferences{unit schedules{dayOfWeek time max upperLimit}}
               }
               ... on SmartFlexChargePoint{
                 status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
               }
             }}
             """, ["a": account], token: token)
-        let weekend = calendar(tz).isDateInWeekend(now)
         for d in (dev["devices"] as? [[String: Any]]) ?? [] {
             let type = d["__typename"] as? String
             guard type == "SmartFlexVehicle" || type == "SmartFlexChargePoint" else { continue }
             let status = d["status"] as? [String: Any]
             let soc = status?["stateOfCharge"] as? [String: Any]
             let power = status?["activePower"] as? [String: Any]
-            let prefs = d["chargingPreferences"] as? [String: Any]
+            let goal = todaysChargeGoal(d["preferences"] as? [String: Any], now: now, tz: tz)
             let label = [d["make"], d["model"]].compactMap { $0 as? String }.joined(separator: " ")
             cars.append(
                 Car(
                     name: label.isEmpty ? (d["name"] as? String ?? "Vehicle") : label,
                     soc: toDouble(soc?["value"]),
-                    target: (prefs?[weekend ? "weekendTargetSoc" : "weekdayTargetSoc"] as? NSNumber)?.intValue,
+                    target: goal.target,
+                    readyBy: goal.readyBy,
                     state: status?["currentState"] as? String,
                     asOf: parseDate(soc?["timestamp"]),
                     powerKw: toDouble(power?["value"]),
@@ -193,5 +255,11 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
         // Charge level is secondary; the rate display still works without it.
     }
 
-    return Snapshot(cheapRate: cheap, peakRate: peak, standingCharge: standingCharge, windows: windows, dispatches: dispatches, cars: cars, tz: tz, fetched: now)
+    return Snapshot(
+        cheapRate: cheap, peakRate: peak, standingCharge: standingCharge, windows: windows,
+        dispatches: dispatches, cars: cars,
+        balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
+        projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
+        tariffEnds: parseTariffEnds(accountNode, now: now),
+        tz: tz, fetched: now)
 }

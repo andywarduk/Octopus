@@ -85,9 +85,10 @@ extension AppDelegate {
         menu.addItem(.separator())
         // A usage window is only offered for a fuel the account actually has. Until discovery
         // finishes both are shown, since hiding them on "not known yet" would be wrong.
-        var items: [(String, Selector, String)] = [("Refresh Now", #selector(refreshNow), "r")]
+        var items: [(String, Selector, String)] = []
         if hasMeters(.electricity) { items.append(("Electricity Use…", #selector(showUsage), "u")) }
         if hasMeters(.gas) { items.append(("Gas Use…", #selector(showGasUsage), "g")) }
+        items.append(("Refresh Now", #selector(refreshNow), "r"))
         items.append(("Settings…", #selector(showSettings), ","))
         items.append(("Quit", #selector(quit), "q"))
         for (title, action, key) in items {

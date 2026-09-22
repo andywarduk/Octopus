@@ -32,6 +32,33 @@ extension AppDelegate {
         Task { await post(title: change.title, body: change.body) }
     }
 
+    /// Alerts as a fixed tariff's end approaches: once at 30 days, then 14, 7 and the day before.
+    /// Which thresholds have been announced is remembered across launches, so restarting the app
+    /// doesn't repeat them.
+    func checkTariffEnding(_ s: Snapshot) {
+        guard tariffAlertEnabled else { return }
+        let now = Date()
+        var alerted = tariffAlerted
+        for end in endingSoon(s.tariffEnds, now: now, tz: s.tz) {
+            let last = lastCoveredDay(end, s.tz)
+            let days = daysUntil(last, now: now, s.tz)
+            guard let threshold = tariffAlertThreshold(daysLeft: days, alerted: alerted[end.key])
+            else { continue }
+            alerted[end.key] = threshold
+            let body = "Your \(end.fuel.rawValue) tariff runs until \(formatted(last, "EEEE d MMMM", s.tz))."
+                + " Check your Octopus account to choose what happens next."
+            Task { await post(title: "\(end.name) ends \(dayCount(days))", body: body) }
+        }
+        // Drop agreements that are gone, so the record doesn't grow without limit. Only when
+        // something came back: an empty list after a bad fetch would wipe the history and
+        // re-alert everything next time.
+        if !s.tariffEnds.isEmpty {
+            let live = Set(s.tariffEnds.map(\.key))
+            alerted = alerted.filter { live.contains($0.key) }
+        }
+        tariffAlerted = alerted
+    }
+
     /// Posts a notification. Returns a description of what's wrong if it couldn't be delivered.
     @discardableResult
     func post(title: String, body: String) async -> String? {

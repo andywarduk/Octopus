@@ -153,6 +153,63 @@ func stamp(_ date: Date, now: Date, _ tz: TimeZone) -> String {
 
 func pence(_ v: Double) -> String { String(format: "%.2fp/kWh", v) }
 
+func money(_ pence: Int) -> String { String(format: "£%.2f", Double(abs(pence)) / 100) }
+
+/// Octopus states a balance as positive when you are in credit, so the sign carries the meaning
+/// and has to be spelled out rather than shown as a minus.
+func balanceText(_ pence: Int) -> String {
+    "\(money(pence)) \(pence < 0 ? "owed" : "in credit")"
+}
+
+func clockTime(_ minutes: Int) -> String {
+    String(format: "%02d:%02d", minutes / 60, minutes % 60)
+}
+
+/// Whole days between two dates by the local calendar, so "tomorrow" is tomorrow whatever the
+/// time of day. Counting in 24-hour blocks would call tomorrow morning "today" this evening.
+func daysUntil(_ date: Date, now: Date, _ tz: TimeZone) -> Int {
+    let cal = calendar(tz)
+    return cal.dateComponents([.day], from: cal.startOfDay(for: now), to: cal.startOfDay(for: date)).day ?? 0
+}
+
+func dayCount(_ days: Int) -> String {
+    switch days {
+    case ...0: return "today"
+    case 1: return "tomorrow"
+    default: return "\(days) days"
+    }
+}
+
+/// How far ahead a tariff ending is worth mentioning at all.
+let tariffNoticePeriod = 60
+
+/// The last day the tariff actually applies.
+///
+/// `validTo` is the instant cover stops, and these contracts stop at midnight — so the raw date is
+/// the first day of the *next* tariff, and quoting it would put the end a day late. Stepping back
+/// a second lands on the last covered day, and is still correct for an agreement that ends at some
+/// other time of day.
+func lastCoveredDay(_ end: TariffEnd, _ tz: TimeZone) -> Date {
+    calendar(tz).startOfDay(for: end.ends.addingTimeInterval(-1))
+}
+
+/// The end dates worth showing, soonest first.
+func endingSoon(_ ends: [TariffEnd], now: Date, tz: TimeZone, within: Int = tariffNoticePeriod) -> [TariffEnd] {
+    ends.filter { daysUntil(lastCoveredDay($0, tz), now: now, tz) <= within }
+        .sorted { $0.ends < $1.ends }
+}
+
+/// Alert once as each of these is crossed, rather than daily for two months.
+let tariffAlertThresholds = [30, 14, 7, 1]
+
+/// The threshold newly crossed, or nil when there is nothing new to say. `alerted` is the
+/// tightest threshold already announced for this agreement.
+func tariffAlertThreshold(daysLeft: Int, alerted: Int?) -> Int? {
+    guard let crossed = tariffAlertThresholds.filter({ daysLeft <= $0 }).min() else { return nil }
+    guard alerted == nil || crossed < alerted! else { return nil }
+    return crossed
+}
+
 /// Octopus doesn't report "plugged in" directly, so infer charging from the live power reading
 /// and the smart-control state.
 func chargingStatus(_ car: Car, now: Date) -> String? {
@@ -206,13 +263,34 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
         }
     }
 
+    // A single-rate tariff has no windows to list, so the section is skipped rather than shown
+    // empty; everything below it still applies.
+    if s.hasCheapRate {
+        lines.append(.separator)
+        lines.append(.header("Upcoming cheap rate"))
+        if intervals.isEmpty { lines.append(.text("None in the next 48 hours")) }
+        for i in intervals.prefix(6) {
+            let isActive = i.start <= now
+            let from = isActive ? "Now" : stamp(i.start, now: now, tz)
+            let sameDay = cal.isDate(i.start, inSameDayAs: i.end)
+            let to = sameDay ? formatted(i.end, "HH:mm", tz) : stamp(i.end, now: now, tz)
+            var text = "\(from) – \(to)"
+            if i.smart { text += "  (smart charge)" }
+            lines.append(.text(text))
+        }
+    }
+
     lines.append(.separator)
     lines.append(.header(s.cars.count == 1 ? "Car" : "Cars"))
     if s.cars.isEmpty { lines.append(.text("No smart devices found")) }
     for car in s.cars {
         if let soc = car.soc {
             var title = "\(car.name): \(Int(soc.rounded()))%"
-            if let target = car.target { title += " (target \(target)%)" }
+            if let target = car.target {
+                var goal = "target \(target)%"
+                if let readyBy = car.readyBy { goal += " by \(clockTime(readyBy))" }
+                title += " (\(goal))"
+            }
             lines.append(.text(title))
             if let status = chargingStatus(car, now: now) { lines.append(.text("    " + status)) }
             if let asOf = car.asOf { lines.append(.text("    Charge level as of \(stamp(asOf, now: now, tz))")) }
@@ -221,27 +299,31 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
         }
     }
 
-    guard s.hasCheapRate else {
-        lines.append(.separator)
-        lines.append(.text(updatedLine(s, tz: tz)))
-        return lines
-    }
-
-    lines.append(.separator)
-    lines.append(.header("Upcoming cheap rate"))
-    if intervals.isEmpty { lines.append(.text("None in the next 48 hours")) }
-    for i in intervals.prefix(6) {
-        let isActive = i.start <= now
-        let from = isActive ? "Now" : stamp(i.start, now: now, tz)
-        let sameDay = cal.isDate(i.start, inSameDayAs: i.end)
-        let to = sameDay ? formatted(i.end, "HH:mm", tz) : stamp(i.end, now: now, tz)
-        var text = "\(from) – \(to)"
-        if i.smart { text += "  (smart charge)" }
-        lines.append(.text(text))
-    }
+    lines += accountLines(s, now: now)
 
     lines.append(.separator)
     lines.append(.text(updatedLine(s, tz: tz)))
+    return lines
+}
+
+/// Balance and any tariff about to end. Absent entirely when the account reported neither, so an
+/// account with nothing to say doesn't get an empty heading.
+func accountLines(_ s: Snapshot, now: Date) -> [Line] {
+    let ending = endingSoon(s.tariffEnds, now: now, tz: s.tz)
+    guard s.balancePence != nil || !ending.isEmpty else { return [] }
+    var lines: [Line] = [.separator, .header("Account")]
+    if let balance = s.balancePence {
+        lines.append(.text("Balance: \(balanceText(balance))"))
+        if let projected = s.projectedBalancePence {
+            lines.append(.text("    \(balanceText(projected)) expected in a year"))
+        }
+    }
+    for end in ending {
+        let last = lastCoveredDay(end, s.tz)
+        let days = daysUntil(last, now: now, s.tz)
+        lines.append(.text("\(end.name) (\(end.fuel.rawValue)) ends \(formatted(last, "EEE d MMM", s.tz))"))
+        lines.append(.text("    " + (days <= 0 ? "Last day today" : "In \(dayCount(days))")))
+    }
     return lines
 }
 
