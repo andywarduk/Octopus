@@ -58,7 +58,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         refresh()
         // Needed by the menu, so don't wait for Settings to be opened.
         loadMeterChoices()
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        // .common, not the default mode: while the menu is open the run loop is tracking events,
+        // and a default-mode timer wouldn't fire until it closed.
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+
+        // Timers don't fire while the Mac is asleep, so catch up rather than wait out the interval.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
     }
