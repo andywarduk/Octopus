@@ -45,6 +45,28 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
         let hairlines = countHairlines(
             periods: series.periods(.halfHour), dark: false, size: CGSize(width: 604, height: 300))
         print("half-hour hairline pixels: \(hairlines)")
+
+        // The carbon chart is drawn by hand too, so it gets the same treatment. `now` is fixed
+        // rather than read from the clock, or the rule moves between runs and the images differ.
+        let tz = TimeZone(identifier: "Europe/London") ?? .current
+        let start = ISO8601DateFormatter().date(from: "2026-09-22T17:00:00Z")!
+        let forecast = sampleCarbonForecast(from: start)
+        for (name, dark, mode, hover) in [
+            ("light", false, CarbonMode.intensity, Int?.none),
+            ("dark", true, .intensity, nil),
+            ("tooltip", false, .intensity, 31),
+            ("mix-light", false, .mix, nil),
+            ("mix-dark", true, .mix, nil),
+            ("mix-tooltip", false, .mix, 31),
+        ] {
+            renderCarbonChart(
+                readings: forecast, now: start.addingTimeInterval(3 * 3600), tz: tz, dark: dark,
+                size: CGSize(width: 740, height: 320), mode: mode, hover: hover,
+                to: "\(dir)/carbon-\(name).png")
+        }
+        renderCarbonChart(
+            readings: [], now: start, tz: tz, dark: false, size: CGSize(width: 624, height: 300),
+            placeholder: "No carbon intensity to show", to: "\(dir)/carbon-empty.png")
     }
     exit(0)
 }

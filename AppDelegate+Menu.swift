@@ -85,16 +85,29 @@ extension AppDelegate {
         menu.addItem(.separator())
         // A usage window is only offered for a fuel the account actually has. Until discovery
         // finishes both are shown, since hiding them on "not known yet" would be wrong.
-        var items: [(String, Selector, String)] = []
-        if hasMeters(.electricity) { items.append(("Electricity Use…", #selector(showUsage), "u")) }
-        if hasMeters(.gas) { items.append(("Gas Use…", #selector(showGasUsage), "g")) }
-        items.append(("Refresh Now", #selector(refreshNow), "r"))
-        items.append(("Settings…", #selector(showSettings), ","))
-        items.append(("Quit", #selector(quit), "q"))
-        for (title, action, key) in items {
-            let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            mi.target = self
-            menu.addItem(mi)
+        func add(_ items: [(String, Selector, String)]) {
+            for (title, action, key) in items {
+                let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
+                mi.target = self
+                menu.addItem(mi)
+            }
         }
+
+        // The windows this app opens.
+        var windows: [(String, Selector, String)] = []
+        if hasMeters(.electricity) { windows.append(("Electricity Use…", #selector(showUsage), "u")) }
+        if hasMeters(.gas) { windows.append(("Gas Use…", #selector(showGasUsage), "g")) }
+        // Not gated on a meter: it needs a postcode rather than a supply point, and the window
+        // says so plainly if there isn't one.
+        windows.append(("Carbon Intensity…", #selector(showCarbon), "c"))
+        add(windows)
+
+        // Acting on the app itself, rather than opening something.
+        menu.addItem(.separator())
+        add([
+            ("Refresh Now", #selector(refreshNow), "r"),
+            ("Settings…", #selector(showSettings), ","),
+            ("Quit", #selector(quit), "q"),
+        ])
     }
 }

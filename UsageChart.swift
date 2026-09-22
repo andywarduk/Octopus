@@ -70,6 +70,62 @@ func formatUsage(
 /// Space under the plot for the smart-charge markers, the boundary ticks and the day labels.
 let plotBottomInset: CGFloat = 30
 
+// MARK: - Shared tooltip
+//
+// Both charts draw the same box, so it lives here with the other pieces they share.
+
+/// One row of a tooltip. A `color` draws the swatch that identifies which series the row is
+/// about — the same colour as the mark it describes, so the row and the bar are tied together
+/// without the reader having to match a position against the legend.
+struct TooltipLine {
+    var text: String
+    var color: NSColor?
+
+    init(_ text: String, _ color: NSColor? = nil) {
+        self.text = text
+        self.color = color
+    }
+}
+
+/// Draws the tooltip beside the hovered slot, never over it: centring the box hides the column's
+/// own cap label. Falls to the other side, then clamps, rather than running off the edge.
+@MainActor
+func drawTooltipBox(_ lines: [TooltipLine], anchorX: CGFloat, slotWidth: CGFloat, plot: CGRect, in bounds: CGRect) {
+    guard !lines.isEmpty else { return }
+    let font = NSFont.systemFont(ofSize: 11)
+    let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+    // One gutter for every row once any row has a swatch, so the text stays in a single column
+    // rather than stepping in and out around the rows that don't.
+    let gutter: CGFloat = lines.contains { $0.color != nil } ? 15 : 0
+    let width = (lines.map { $0.text.size(withAttributes: attributes).width }.max() ?? 80) + gutter
+    let height = CGFloat(lines.count) * 15 + 10
+    let boxWidth = width + 16
+    let gap = max(8, slotWidth / 2 + 8)
+    var originX = anchorX + gap
+    if originX + boxWidth > bounds.width - 4 { originX = anchorX - gap - boxWidth }
+    originX = min(max(originX, 4), bounds.width - boxWidth - 4)
+    let box = CGRect(x: originX, y: plot.maxY - height, width: boxWidth, height: height)
+
+    NSColor.windowBackgroundColor.withAlphaComponent(0.97).setFill()
+    let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+    path.fill()
+    NSColor.separatorColor.setStroke()
+    path.stroke()
+
+    for (row, line) in lines.enumerated() {
+        let baseline = box.maxY - 17 - CGFloat(row) * 15
+        if let color = line.color {
+            color.setFill()
+            NSBezierPath(
+                roundedRect: CGRect(x: box.minX + 8, y: baseline + 2, width: 9, height: 9),
+                xRadius: 2, yRadius: 2
+            ).fill()
+        }
+        NSAttributedString(string: line.text, attributes: attributes)
+            .draw(at: CGPoint(x: box.minX + 8 + gutter, y: baseline))
+    }
+}
+
 @MainActor
 final class UsageChartView: NSView {
     var periods: [UsagePeriod] = [] { didSet { needsDisplay = true } }
@@ -389,42 +445,23 @@ final class UsageChartView: NSView {
             heading = "\(formatted(period.start, "EEE d MMM HH:mm", tz))–\(formatted(period.end, "HH:mm", tz))"
                 + "  ·  \(formatUsage(period.total(unit, bands), unit, withUnit: true, energyLabel: energyLabel))"
         }
-        var lines = [heading]
+        var lines = [TooltipLine(heading)]
         if !period.hasData {
-            lines.append("No data yet — Octopus publishes about two days behind")
+            lines.append(TooltipLine("No data yet — Octopus publishes about two days behind"))
         }
         for band in bands where period.value(band, unit) > 0 {
-            var line = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true, energyLabel: energyLabel))"
-            if let price = period.price(band) { line += String(format: " @ %.2fp", price) }
-            lines.append(line)
+            var text = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true, energyLabel: energyLabel))"
+            if let price = period.price(band) { text += String(format: " @ %.2fp", price) }
+            lines.append(TooltipLine(text, SeriesColor.of(band, dark: isDark)))
         }
         if period.smartCharge {
-            lines.append("Smart charge ran in this period")
+            lines.append(TooltipLine("Smart charge ran in this period", SeriesColor.smart(dark: isDark)))
         }
-        if period.hasData, period.total(unit, bands) == 0 { lines.append("No usage") }
+        if period.hasData, period.total(unit, bands) == 0 { lines.append(TooltipLine("No usage")) }
 
-        let font = NSFont.systemFont(ofSize: 11)
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
-        let width = lines.map { $0.size(withAttributes: attributes).width }.max() ?? 80
-        let height = CGFloat(lines.count) * 15 + 10
-        // Sit beside the column, never over it: centring the box hides the column's own cap label.
-        let anchorX = plot.minX + slotWidth * (CGFloat(index) + 0.5)
-        let boxWidth = width + 16
-        let gap = max(8, slotWidth / 2 + 8)
-        var originX = anchorX + gap
-        if originX + boxWidth > bounds.width - 4 { originX = anchorX - gap - boxWidth }
-        originX = min(max(originX, 4), bounds.width - boxWidth - 4)
-        let box = CGRect(x: originX, y: plot.maxY - height, width: boxWidth, height: height)
-
-        NSColor.windowBackgroundColor.withAlphaComponent(0.97).setFill()
-        let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
-        path.fill()
-        NSColor.separatorColor.setStroke()
-        path.stroke()
-        for (row, line) in lines.enumerated() {
-            NSAttributedString(string: line, attributes: attributes)
-                .draw(at: CGPoint(x: box.minX + 8, y: box.maxY - 17 - CGFloat(row) * 15))
-        }
+        drawTooltipBox(
+            lines, anchorX: plot.minX + slotWidth * (CGFloat(index) + 0.5), slotWidth: slotWidth,
+            plot: plot, in: bounds)
     }
 }
 

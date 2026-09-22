@@ -4,7 +4,7 @@ A macOS menu bar app for Octopus Energy, built around Intelligent Octopus Go. It
 are on the cheap or standard rate right now, when that next changes, your car's charge level, and
 charts of your electricity and gas use.
 
-There are also two command-line scripts covering the same ground, for the terminal or for cron.
+There are also three command-line scripts covering the same ground, for the terminal or for cron.
 
 > **This project was vibe-coded.** Every line was written by Claude (Anthropic's Claude Code) from
 > conversational prompts, then checked against a real Octopus account. It has no test suite beyond
@@ -38,6 +38,7 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   Octopus nudges dispatches by a minute or two constantly, and those are ignored. All three can be
   turned off in Settings.
 - **Electricity Use… / Gas Use…:** a week of use as stacked columns.
+- **Carbon Intensity…:** how clean the grid is where you live, half hour by half hour.
 
 ### The usage windows
 
@@ -75,6 +76,50 @@ Octopus states the end as the instant cover stops, which is midnight, so the dat
 before that instant — the last day you are actually on that tariff. Variable tariffs have no end
 date and are never listed.
 
+### The carbon intensity window
+
+Grams of CO₂ per kWh for your region, one bar per half hour, shaded by the same five bands the
+grid operator publishes — very low through very high. Hover a bar for the exact figure and what
+the grid is burning. A dotted rule marks now, and a dashed one marks 100 gCO₂/kWh — the line
+Octopus draws on its own site between green and not-so-green.
+
+Two sources answer the same question, and the window switches between them:
+
+- **National Grid** is the default. It needs no API key, covers 48 hours ahead, serves past weeks,
+  and reports the generation mix behind every number.
+- **Octopus** carries its own forecast. It covers 24 hours only, with no history and no mix, so it
+  is mostly here for comparison — the two agreed within 2 gCO₂ when this was built.
+
+**Intensity or Fuel Mix.** The mix view stacks each half hour by what generated it — gas, wind,
+nuclear and the rest — with each fuel's average across the window in the legend. It is only
+available from National Grid, and the switch disables itself otherwise.
+
+A mix bar's **height is GB electricity demand** for that half hour, so the shape shows when the
+country is actually drawing power: a trough around 20 GW overnight, a peak near 34 GW in the early
+evening. Settled demand comes from the outturn, and the day-ahead forecast covers the near future;
+half hours beyond the forecast show a baseline dash rather than an empty bar. If demand can't be
+reached at all, bars fall back to showing shares out of 100%.
+
+Demand is national, so the split stacked inside it is the national one wherever that has been
+published — and there the tooltip gives real gigawatts per fuel. Where only the regional figure
+exists, the segments are your region's proportions drawn at national scale and the tooltip drops
+the gigawatt figures. The footer always states which basis is in use.
+
+**Implausible half hours are greyed.** The published forecast occasionally misfires around
+sunrise, reporting solar as most of the country's generation and the grid as almost carbon-free
+for a half hour or two. Anything implying more solar than Britain can physically generate is
+drawn in flat grey and left out of the legend's averages, with the tooltip saying why. The
+figures are not corrected — they belong to the grid operator, and the glitch is in their data
+rather than in this app.
+
+**Week navigation.** Back and forward a week at a time, the same weeks the usage windows show, so
+the two can be read against each other. Forward from the earliest week returns to the live
+forecast. Past weeks are kept for the session, since they cannot change. Only National Grid serves
+history, so the arrows are disabled on Octopus.
+
+The region comes from the postcode of whichever electricity meter is selected in Settings, and
+only the outward part of it is sent.
+
 ### Multiple properties and meters
 
 Meters are matched to the property they actually sit at, and only those with an active agreement
@@ -108,6 +153,27 @@ Octopus 12M Fixed (gas) ends Thu 8 Oct — in 16 days
 OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --days 7
 OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --meters    # list meters
 ```
+
+`octopus_carbon.py` prints the carbon intensity chart as text. It needs **no API key** unless you
+want the Octopus source or want the postcode looked up from your account:
+
+```bash
+python3 octopus_carbon.py --postcode SN13          # next 48 hours
+python3 octopus_carbon.py --postcode SN13 --mix    # with the generation mix
+python3 octopus_carbon.py --postcode SN13 --week 1 # last week
+OCTOPUS_API_KEY=sk_live_... python3 octopus_carbon.py --source octopus
+```
+
+```
+   13:00 ████████··························    69 low          22.7 GW  wind 36% (8.3 GW), solar 22% (5.0 GW)
+   13:30 ████████··························    69 low          23.3 GW  wind 37% (8.6 GW), solar 21% (5.0 GW)
+
+  97 half hours · 17 below 100 gCO2/kWh
+  cleanest Thu 13:30 at 67 gCO2/kWh
+```
+
+Half hours whose published mix is impossible are marked `!` and left out of those figures, as in
+the app.
 
 ### Known limitations
 

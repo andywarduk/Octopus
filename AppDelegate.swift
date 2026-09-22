@@ -22,6 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         uniqueKeysWithValues: Fuel.allCases.map {
             ($0, UsageWindowController(fuel: $0, apiKey: { [weak self] in self?.apiKey }))
         })
+    /// One window, with the source switchable inside it. Both sources answer regionally, so the
+    /// postcode comes from whichever property's electricity meter is selected.
+    lazy var carbonController = CarbonWindowController(
+        apiKey: { [weak self] in self?.apiKey },
+        postcode: { [weak self] in
+            MeterPreference.resolve(from: self?.meterChoices ?? [], fuel: .electricity)?.postcode
+        })
     var meterPickers: [Fuel: NSPopUpButton] = [:]
     var meterChoices: [MeterChoice] = []
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
@@ -148,6 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     @objc func showUsage() { usageControllers[.electricity]?.show() }
 
     @objc func showGasUsage() { usageControllers[.gas]?.show() }
+
+    @objc func showCarbon() { carbonController.show() }
 
     @objc func refreshNow() { refresh(manual: true) }
 

@@ -137,9 +137,11 @@ extension AppDelegate {
         MeterPreference.save(forFuel[index])
         // Only this fuel's window is affected; the other meter is unchanged.
         usageControllers[fuel]?.resetForMeterChange()
-        // The menu bar rate follows the electricity meter, so only that one restarts it.
+        // The menu bar rate follows the electricity meter, so only that one restarts it. Carbon
+        // intensity is regional and follows the same choice's postcode.
         if fuel == .electricity {
             snapshot = nil
+            carbonController.resetForMeterChange()
             refresh(manual: true)
         }
     }

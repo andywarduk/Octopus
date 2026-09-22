@@ -20,6 +20,8 @@ struct MeterChoice: Equatable {
     var accountNumber: String
     var propertyId: String
     var address: String
+    /// Carried so the carbon intensity window has a region to ask about without another request.
+    var postcode: String = ""
     /// MPAN for electricity, MPRN for gas.
     var supplyPoint: String
 
@@ -69,6 +71,7 @@ func discoverMeters(token: String) async throws -> [MeterChoice] {
               properties{
                 id
                 address
+                postcode
                 electricityMeterPoints{mpan direction}
                 gasMeterPoints{mprn}
               }
@@ -90,6 +93,7 @@ func discoverMeters(token: String) async throws -> [MeterChoice] {
         for property in (acc["properties"] as? [[String: Any]]) ?? [] {
             guard let propertyId = property["id"] as? String else { continue }
             let address = property["address"] as? String ?? ""
+            let postcode = property["postcode"] as? String ?? ""
             for point in (property["electricityMeterPoints"] as? [[String: Any]]) ?? [] {
                 guard
                     let mpan = point["mpan"] as? String,
@@ -99,14 +103,14 @@ func discoverMeters(token: String) async throws -> [MeterChoice] {
                 choices.append(
                     MeterChoice(
                         fuel: .electricity, accountNumber: number, propertyId: propertyId,
-                        address: address, supplyPoint: mpan))
+                        address: address, postcode: postcode, supplyPoint: mpan))
             }
             for point in (property["gasMeterPoints"] as? [[String: Any]]) ?? [] {
                 guard let mprn = point["mprn"] as? String, liveGas.contains(mprn) else { continue }
                 choices.append(
                     MeterChoice(
                         fuel: .gas, accountNumber: number, propertyId: propertyId,
-                        address: address, supplyPoint: mprn))
+                        address: address, postcode: postcode, supplyPoint: mprn))
             }
         }
     }

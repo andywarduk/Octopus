@@ -247,6 +247,200 @@ func selfTest() {
         print("    \(value)p -> \(balanceText(value))")
     }
 
+    print("  carbon intensity parsing:")
+    // Both sources name the same five bands in different spellings, and both have a shape that
+    // silently yields nothing if mis-parsed: Octopus omits the period end, National Grid stamps
+    // its times without seconds.
+    print("    index spellings: "
+        + ["VERY_LOW", "very low", "Very High", "moderate", "nonsense"]
+            .map { "\($0)->\(CarbonIndex(apiValue: $0)?.title ?? "unparsed")" }
+            .joined(separator: ", "))
+    // An outward code on its own must survive: stripping three characters off "SN13" gives "S",
+    // which both APIs reject.
+    print("    outward codes: "
+        + ["SN13 9XX", "sn13 9xx", "SN139XX", "M1 1AA", "M11AA", "SN13", "M1", ""]
+            .map { "'\($0)'->'\(outwardCode($0))'" }.joined(separator: ", "))
+
+    let octopusRows: [[String: Any]] = [
+        ["periodStart": "2026-09-22T19:00:00+00:00", "value": 298.0, "index": "VERY_HIGH"],
+        // Deliberately out of order: the end of each period is the next one's start, so the rows
+        // have to be sorted before that can be worked out.
+        ["periodStart": "2026-09-22T18:30:00+00:00", "value": 289.0, "index": "VERY_HIGH"],
+        ["periodStart": "2026-09-22T19:30:00+00:00", "value": 287.0, "index": "VERY_HIGH"],
+        ["periodStart": "2026-09-22T20:00:00+00:00", "value": NSNull(), "index": "HIGH"],
+    ]
+    let fromOctopus = parseOctopusCarbon(octopusRows)
+    print("    Octopus: \(fromOctopus.count) of \(octopusRows.count) rows parsed")
+    for reading in fromOctopus {
+        print("      \(formatted(reading.start, "HH:mm", tzLondon))–\(formatted(reading.end, "HH:mm", tzLondon)) "
+            + "\(formatGrams(reading.grams)) \(reading.index.title) mix=\(reading.mix.count)")
+    }
+
+    let gridRows: [[String: Any]] = [
+        // No seconds in either stamp: ISO8601DateFormatter rejects this under .withInternetDateTime.
+        ["from": "2026-09-22T17:30Z", "to": "2026-09-22T18:00Z",
+         "intensity": ["forecast": 291, "index": "very high"],
+         "generationmix": [["fuel": "gas", "perc": 69.9], ["fuel": "wind", "perc": 2.6],
+                           ["fuel": "coal", "perc": 0.0]]],
+        // A past period carries `actual` as well, which should win over the forecast.
+        ["from": "2026-09-22T18:00Z", "to": "2026-09-22T18:30Z",
+         "intensity": ["forecast": 280, "actual": 273, "index": "very high"],
+         "generationmix": [["fuel": "gas", "perc": 65.5]]],
+        ["from": "2026-09-22T18:30Z", "to": "2026-09-22T19:00Z",
+         "intensity": ["forecast": NSNull(), "index": "high"]],
+    ]
+    let fromGrid = parseNationalGridCarbon(gridRows)
+    print("    National Grid: \(fromGrid.count) of \(gridRows.count) rows parsed")
+    for reading in fromGrid {
+        let mix = reading.mix.map { String(format: "%@ %.1f", $0.fuel.title, $0.percent) }
+            .joined(separator: ", ")
+        print("      \(formatted(reading.start, "HH:mm", tzLondon))–\(formatted(reading.end, "HH:mm", tzLondon)) "
+            + "\(formatGrams(reading.grams)) \(reading.index.title) [\(mix)]")
+    }
+
+    let forecast = sampleCarbonForecast(from: date("2026-09-22T17:00:00Z"))
+    let carbonSeries = CarbonSeries(
+        source: .nationalGrid, region: "South England", outward: "SN13", readings: forecast,
+        fetchedAt: date("2026-09-22T17:05:00Z"))
+    let cleanest = carbonSeries.cleanest
+    print("    sample forecast: \(forecast.count) half hours, "
+        + "cleanest \(cleanest.map { formatted($0.start, "EEE HH:mm", tzLondon) } ?? "none") at "
+        + "\(cleanest.map { formatGrams($0.grams) } ?? "-")")
+    let soonAfter = carbonSeries.isFresh(now: date("2026-09-22T17:20:00Z"))
+    let anHourLater = carbonSeries.isFresh(now: date("2026-09-22T18:10:00Z"))
+    print("    freshness: forecast just fetched=\(soonAfter), an hour old=\(anHourLater)")
+    // A past week can't change, so it stays fresh however long ago it was fetched. The current
+    // week can, and must not.
+    var pastWeek = carbonSeries
+    pastWeek.period = .week(back: 3)
+    var thisWeek = carbonSeries
+    thisWeek.period = .week(back: 0)
+    print("    freshness: past week after a day=\(pastWeek.isFresh(now: date("2026-09-23T17:05:00Z"))), "
+        + "current week after a day=\(thisWeek.isFresh(now: date("2026-09-23T17:05:00Z")))")
+
+    // Unknown fuels must fold into `other` and add up, not each claim the slot — a column has to
+    // keep totalling 100%.
+    let mixRow: [[String: Any]] = [[
+        "from": "2026-09-22T17:30Z", "to": "2026-09-22T18:00Z",
+        "intensity": ["forecast": 180, "index": "high"],
+        "generationmix": [
+            ["fuel": "wind", "perc": 34.0], ["fuel": "gas", "perc": 42.9],
+            ["fuel": "fusion", "perc": 2.0], ["fuel": "unobtainium", "perc": 1.1],
+            ["fuel": "nuclear", "perc": 20.0], ["fuel": "coal", "perc": 0.0],
+        ],
+    ]]
+    let mixed = parseNationalGridCarbon(mixRow)[0].mix
+    print("    fuel mapping: "
+        + mixed.map { String(format: "%@ %.1f", $0.fuel.title, $0.percent) }.joined(separator: ", "))
+    print("    stack order matches GridFuel: "
+        + "\(mixed.map(\.fuel) == GridFuel.allCases.filter { f in mixed.contains { $0.fuel == f } }), "
+        + "total \(String(format: "%.1f", mixed.reduce(0) { $0 + $1.percent }))")
+
+    // The mix view's bars stand at GB demand while the intensity view is regional, and the mix
+    // behind them can be either basis in one window. The footer has to say which, so that
+    // wording is worth pinning down.
+    print("    mix basis wording:")
+    func basis(national: Int, regional: Int, demand: Int) -> CarbonSeries {
+        var readings: [CarbonReading] = []
+        for position in 0..<(national + regional) {
+            let from = date("2026-09-22T00:00:00Z").addingTimeInterval(Double(position) * 1800)
+            readings.append(
+                CarbonReading(
+                    start: from, end: from.addingTimeInterval(1800), grams: 200, index: .high,
+                    mix: [FuelShare(fuel: .gas, percent: 100)],
+                    demandMW: position < demand ? 30_000 : nil,
+                    mixIsNational: position < national))
+        }
+        return CarbonSeries(
+            source: .nationalGrid, region: "South England", outward: "SN13", readings: readings,
+            fetchedAt: Date())
+    }
+    for (label, series) in [
+        ("all national, all demand", basis(national: 4, regional: 0, demand: 4)),
+        ("all regional, no demand", basis(national: 0, regional: 4, demand: 0)),
+        ("national then regional, part demand", basis(national: 2, regional: 2, demand: 3)),
+    ] {
+        print("      \(label.padding(toLength: 36, withPad: " ", startingAt: 0)): "
+            + "\(series.mixBasis), hasDemand=\(series.hasDemand)")
+    }
+    // The real glitch of 23 September 2026 and the sound half hours either side of it.
+    print("    implausible mix screening (real values):")
+    for (label, solar, gas, demand) in [
+        ("05:30Z  78.3% solar", 78.3, 4.4, 24_277.0),
+        ("06:00Z  84.5% solar", 84.5, 2.2, 26_645.0),
+        ("06:30Z   2.2% solar", 2.2, 32.7, 27_400.0),
+        ("midsummer noon, 30% of a low demand", 30.0, 20.0, 24_000.0),
+        ("no demand known", 84.5, 2.2, -1.0),
+    ] as [(String, Double, Double, Double)] {
+        let reading = CarbonReading(
+            start: date("2026-09-23T05:30:00Z"), end: date("2026-09-23T06:00:00Z"), grams: 8,
+            index: .veryLow,
+            mix: [
+                FuelShare(fuel: .gas, percent: gas), FuelShare(fuel: .solar, percent: solar),
+                FuelShare(fuel: .wind, percent: 100 - gas - solar),
+            ],
+            demandMW: demand < 0 ? nil : demand)
+        let implied = reading.impliedSolarMW.map { String(format: "%.1f GW", $0 / 1000) } ?? "unknown"
+        print("      \(label.padding(toLength: 36, withPad: " ", startingAt: 0)): implied solar "
+            + "\(implied.padding(toLength: 9, withPad: " ", startingAt: 0)) -> "
+            + (mixLooksImplausible(reading) ? "SUSPECT" : "ok"))
+    }
+    print("      ceiling \(Int(gbSolarCeilingMW / 1000)) GW, against a GB record near 14 GW")
+
+    // Elexon publishes settled demand when a half hour ends, and drops it from the day-ahead
+    // forecast once it starts, so the period in progress is briefly covered by neither. That is
+    // not the same as running off the end of the forecast, and must not be described as if it is.
+    print("    demand gaps:")
+    let atNow = date("2026-09-22T20:03:00Z")
+    for (label, start, demand) in [
+        ("settled, an hour ago", "2026-09-22T19:00:00Z", 29_969.0),
+        ("just ended, not yet published", "2026-09-22T19:30:00Z", -1),
+        ("in progress", "2026-09-22T20:00:00Z", -1),
+        ("forecast, later tonight", "2026-09-22T21:00:00Z", 28_339.0),
+        ("past the forecast horizon", "2026-09-24T10:00:00Z", -1),
+    ] as [(String, String, Double)] {
+        let reading = CarbonReading(
+            start: date(start), end: date(start).addingTimeInterval(1800), grams: 180, index: .high,
+            mix: [FuelShare(fuel: .gas, percent: 100)], demandMW: demand < 0 ? nil : demand)
+        print("      \(label.padding(toLength: 32, withPad: " ", startingAt: 0)): "
+            + "\(demandGap(reading, now: atNow))")
+    }
+
+    // The cleanest half hour is what the footer recommends acting on, so a glitched reading must
+    // never win it — the sunrise misfire reports single figures.
+    print("    cleanest excludes implausible readings:")
+    var withGlitch: [CarbonReading] = []
+    for (position, grams) in [52.0, 284, 5, 49, 37].enumerated() {
+        let from = date("2026-09-22T20:00:00Z").addingTimeInterval(Double(position) * 1800)
+        withGlitch.append(
+            CarbonReading(
+                start: from, end: from.addingTimeInterval(1800), grams: grams,
+                index: grams < 50 ? .veryLow : .high, mix: [], demandMW: 26_000,
+                // The 5 gCO₂ reading is the sunrise glitch.
+                suspectMix: grams == 5))
+    }
+    let glitched = CarbonSeries(
+        source: .octopus, outward: "SN13", readings: withGlitch, fetchedAt: Date())
+    print("      values \(withGlitch.map { Int($0.grams) }) -> cleanest "
+        + "\(glitched.cleanest.map { formatGrams($0.grams) } ?? "none"), "
+        + "\(glitched.suspectCount) suspect")
+
+    print("    power formatting: "
+        + [30_634.0, 21_800, 1_050, 0].map { formatPower($0) }.joined(separator: ", "))
+
+    print("  carbon window navigation:")
+    // Stepping back from the forecast lands on the current week; forward past it returns there.
+    var at = CarbonPeriod.forecast
+    func step(_ delta: Int) -> String {
+        switch at {
+        case .forecast: at = delta > 0 ? .week(back: 0) : .forecast
+        case .week(let back): at = back + delta < 0 ? .forecast : .week(back: back + delta)
+        }
+        return at.weeksBack.map { "week -\($0)" } ?? "forecast"
+    }
+    print("    back, back, back, forward, forward, forward: "
+        + [step(1), step(1), step(1), step(-1), step(-1), step(-1)].joined(separator: " → "))
+
     print("  completeness:")
     let dayStart = date("2026-09-18T23:00:00Z")   // 00:00 BST
     let dayEnd = dayStart.addingTimeInterval(86400)

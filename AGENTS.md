@@ -28,6 +28,9 @@ chart, then look at the PNGs.** The chart has repeatedly been broken in ways onl
 rendered output. The sample week is seeded, so the images are identical run to run and a diff is
 meaningful.
 
+`--chartdemo` renders the carbon chart as `carbon-*.png` alongside the usage ones. Its `now` rule
+is fixed rather than read from the clock, or the images differ run to run and a diff means nothing.
+
 `--chartdemo` also counts antialiased seams between half-hourly bars — pixels that are neither the
 surface nor a band colour. A handful is expected, at the edges of the deliberate no-readings gap
 in the sample; it reports 9 at the time of writing. Tens or hundreds means adjacent bars no longer
@@ -69,6 +72,9 @@ settled by rendering it at a much lower value and confirming the difference.
 | `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch |
 | `UsageChart.swift` | The stacked column chart, its palette, and the offscreen renderer |
 | `UsageWindowController.swift` | One usage window; one instance per fuel |
+| `CarbonIntensity.swift` | Carbon intensity model and both sources' fetch and parsing |
+| `CarbonChart.swift` | The carbon intensity chart, its sequential ramp, and its renderer |
+| `CarbonWindowController.swift` | The carbon intensity window |
 | `AppIcon.swift` | The app icon, drawn in code |
 | `AppDelegate.swift` | Status item, the 30-second tick, the refresh cycle |
 | `AppDelegate+Menu.swift` | Icon state and menu building |
@@ -77,7 +83,9 @@ settled by rendering it at a much lower value and confirming the difference.
 | `SelfTest.swift` | `--selftest` output |
 | `main.swift` | Entry point and command-line flags |
 
-`octopus_rate.py` and `octopus_history.py` are standalone; standard library only, Python 3.9+.
+`octopus_rate.py`, `octopus_history.py` and `octopus_carbon.py` are standalone; standard library
+only, Python 3.9+. `octopus_carbon.py` needs no API key unless asked for the Octopus source or
+for the account's postcode, since both of the sources behind it are keyless.
 They duplicate the auth and meter-selection logic rather than sharing it.
 
 ## The API
@@ -167,9 +175,29 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   a plain `__type(...){fields{name}}` yet still answers queries; it is deprecated in favour of
   `preferences`. Pass `fields(includeDeprecated:true)` before concluding a field the code already
   uses has been removed.
+- **An outward code is not a postcode with three characters lopped off.** `outwardCode`/
+  `outward_code` only strip the inward part from something long enough to have one: `"SN13"` given
+  on its own is already the answer, and dropping three characters leaves `"S"`, which both APIs
+  reject with a 400. This bit the Python script the first time it ran.
 - **An agreement's `validTo` is the instant cover stops, not its last day.** These end at
   midnight, so the raw date is the first day of the *next* tariff and quoting it puts the end a
   day late. `lastCoveredDay` steps back a second.
+- **Carbon intensity has two sources and they are not interchangeable.**
+  `getProjectedRegionalCarbonIntensity(postcode:)` works with a customer key and returns 48
+  half-hourly rows — but only `periodStart`, so each period's end is the next row's start, and the
+  rows must be sorted before that can be worked out. It is *projected* only, so it cannot be laid
+  over past usage. National Grid's free API (`api.carbonintensity.org.uk`, no key) serves 48 hours
+  forward, arbitrary history and the generation mix, and matched Octopus within 2 gCO₂.
+- **National Grid's regional history is not capped at 48 hours.** A seven-day range returns all
+  337 half hours in one request, so a week costs one call. Regional rows carry only `forecast`,
+  never `actual`, even for the past — do not treat a past week as measured.
+- **National Grid stamps times without seconds** (`2026-09-22T17:30Z`), which
+  `ISO8601DateFormatter` rejects under `.withInternetDateTime` — every row parses to nil and the
+  series looks empty rather than broken. `parseCarbonDate` handles both. Its forward endpoint
+  returns `data` as an object while the current-period one returns an array of them, and past
+  periods carry `actual` alongside `forecast`.
+- **`getSolarGenerationEstimate` returns an internal error** (KT-CT-7899) on the development
+  account, most likely because there is no solar on it. Untested, treat as unavailable.
 - **`chargingSessions.energyAdded` is sometimes impossible.** Four of five sessions matched
   `stateOfChargeChange` × `vehicleBatterySize` to within charging losses; the fifth reported
   76.35 kWh for a 20% change on a 49.2 kWh battery, which also exceeds what 7 kW could deliver in
@@ -260,6 +288,84 @@ against real data. Treat those paths as unverified.
   palette separates from blue in dark mode at the bottom of a stack — violet, the closest, is
   ΔE 1.9 for colourblind viewers. Grey separates by saturation instead and fails the chroma floor
   deliberately. It has no place on a kWh axis, where it would be energy never delivered.
+- **The carbon chart uses a sequential ramp, not a green-to-red one.** The index is an ordinal
+  scale, so it takes one hue stepped by lightness; a rainbow would be both a palette violation and
+  a colourblind trap at five steps. Checked numerically rather than by eye: lightness is monotonic
+  in both modes, adjacent steps differ by about 1.5:1, and the top bands clear 7:1 against their
+  surface. Dark mode runs dim to bright rather than flipping the light steps, so that "more"
+  stays "more ink" on a dark surface. Colour never carries it alone — all five bands are always
+  in the legend, the tooltip names the band, and the bar height is the number.
+- **`GridFuel`'s declaration order is the fuel-mix stack order and the palette slot order, and
+  the three must stay in step.** The eight categorical slots clear their colourblind gates on the
+  *adjacent* pairlist, and in a stack "adjacent" means neighbouring in that enum — so reordering
+  the cases silently voids the guarantee. Validated as a nine-colour sequence (the eight slots
+  plus grey for `other`): worst adjacent CVD ΔE 9.1 light, 8.4 dark, both above the 8 target.
+  `other` sits at the bottom: with it on top, grey fell beside red at ΔE 6.2 in dark mode, inside
+  the band that needs secondary encoding. Grey fails the chroma and lightness gates deliberately,
+  as the standing charge does — it marks a residual, not a fuel. Re-run `validate_palette.js` if
+  any of this moves.
+- **Tooltip rows carry the swatch of the mark they describe**, drawn by the shared
+  `drawTooltipBox` in `UsageChart.swift` — both charts use it, and it also owns the
+  beside-not-over placement. The gutter is reserved for every row as soon as any row has a
+  swatch, so the text stays in one column instead of stepping in and out. The carbon chart drops
+  the index swatch in fuel-mix mode, where the bars are no longer coloured by band; the fuel
+  swatches stay in both views, since those colours are that fuel's identity throughout the window.
+- **The fuel-mix bar height is GB demand, and that forces the mix's geography.** Demand comes from
+  Elexon (`data.elexon.co.uk/bmrs/api/v1`, keyless): `/demand/outturn` gives `initialDemandOutturn`
+  for settled half hours, `/forecast/demand/day-ahead` gives `nationalDemand` ahead of now. Both
+  are requested every time, because a window can straddle now and neither covers the other's half.
+  Multiplying a *regional* mix by *national* demand yields a quantity that does not exist, so the
+  national mix (`api.carbonintensity.org.uk/generation/{from}/{to}`) is used wherever it has been
+  published. **It does forecast**, contrary to an earlier note here: a range *spanning now*
+  returns the full 97 rows including the future. It is a range whose **start** is in the future
+  that silently clamps to the last published half hour — which is what produced the wrong
+  conclusion. The regional forecast remains the fallback, `mixIsNational` records which was used,
+  and the tooltip prints per-fuel gigawatts **only** for the national basis.
+  `CarbonSeries.mixBasis` is what tells the user, and it is covered by `--selftest`.
+- **The carbon intensity forecast misfires at sunrise, and it is upstream.** On 23 September 2026
+  the two half hours to 06:00Z carried solar at 78% and 84% of generation — 19.0 GW and 22.5 GW
+  against demand of 24.3 and 26.6 GW — with an intensity of 5 and 8 gCO₂/kWh, before snapping
+  back to 2.2% solar and 203 gCO₂ in the next period. Both the national and the regional series
+  carried it, so it is not a parsing fault. `mixLooksImplausible` screens for it against a 16 GW
+  solar ceiling (GB's record is about 14 GW from roughly 18 GW installed). Such half hours are
+  **greyed, never corrected** — the number belongs to the grid operator. They are also excluded
+  from the legend's averages, since one bad sunrise drags a whole window's solar figure up.
+  In the mix view the bar keeps its real height, because demand is sound and only the split is
+  not; in the intensity view the whole column is a faint band, because the glitch takes the
+  intensity with it and plotting 8 gCO₂ would just repeat the bad number.
+- **Screening runs on the Octopus source too, using national data it does not carry.** Octopus
+  relays the same regional forecast — compared half hour by half hour against
+  `api.carbonintensity.org.uk`, the two series match — so it inherits the same glitches while
+  having no mix or demand to test them against. Demand and the national mix are therefore
+  fetched for the Octopus path as well, for **screening only**: the national mix is deliberately
+  not assigned to `mix`, or the fuel-mix view would switch itself on for a source that has none.
+- **`cleanest` excludes suspect readings.** Without that the footer nominates the sunrise glitch —
+  5 gCO₂/kWh — as the best time to use power, which is the single most actionable thing this
+  window says. Covered by `--selftest`.
+- **The 100 gCO₂/kWh rule is drawn over the columns, not behind them.** At half-hourly width the
+  bars are a solid wall and a rule behind them is invisible for most of the chart. It appears on
+  the intensity view only — it means nothing against a demand or percentage axis — and only when
+  the axis actually reaches it. The threshold is Octopus's own published green/not-so-green line,
+  which is why it earns a rule when an invented spike threshold would not.
+- **Not every forecast oddity is screened.** The same series put 284 and 276 gCO₂ either side of
+  half hours reading 52 and 51, and an isolated 197 between 51 and 49 — swings the grid cannot
+  physically make. These are left alone: catching them needs a spike heuristic with a threshold
+  nobody can justify from physics, and suppressing real variation is worse than showing a rough
+  forecast. Say it is the operator's data rather than inventing a smoother.
+- **The half hour in progress has no demand, and that is structural.** Elexon publishes a
+  period's settled INDO *when the period ends* (19:30Z was published at 20:00Z), and the
+  day-ahead forecast drops a period once it has started — so for up to thirty minutes the current
+  half hour is covered by neither and then fills itself in. `DemandGap` separates that from
+  running off the end of the forecast; they must not be worded the same way, and `--selftest`
+  pins the classification down. Do not "fix" the gap by interpolating or by borrowing the
+  5-minutely system demand from `/demand/outturn/summary`: that series is transmission demand,
+  several GW above national demand, and splicing it in would put a step in one bar.
+- **Demand is a garnish, not a dependency.** Neither demand call throws: a failure leaves the bars
+  unscaled and the view falls back to percentages, rather than losing the whole window. Bars are
+  only scaled when at least half the window has demand, or the edge of the day-ahead forecast
+  would leave most of a chart as gaps.
+- **The mix stack is normalised to each column's own total.** The shares are rounded at source and
+  can add to 100.1, which draws a sliver above a fixed 100% axis and reads as a bug.
 - **The chart palette is validated**, not chosen by eye. Off-peak green `#1baf7a` / `#199e70`,
   standard blue `#2a78d6` / `#3987e5` (light/dark), smart-charge marker orange `#eb6834` /
   `#d95926`. These pass colourblind and contrast checks in both modes. Green is below 3:1 on the
