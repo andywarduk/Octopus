@@ -85,6 +85,16 @@ final class UsageChartView: NSView {
 
     override var isFlipped: Bool { false }
 
+    /// Device pixels per point: 2 on a Retina display, 1 offscreen where there is no window.
+    private var pixelScale: CGFloat { window?.backingScaleFactor ?? 1 }
+
+    /// Snaps to the device pixel grid rather than to whole points. Points are two device pixels
+    /// on Retina, so rounding to them makes half-hourly bars alternate 1pt and 2pt — a visible
+    /// 2:1 difference in thickness. Snapping finer keeps edges crisp and the widths closer.
+    private func snapToPixel(_ value: CGFloat) -> CGFloat {
+        (value * pixelScale).rounded() / pixelScale
+    }
+
     /// Bands actually drawn, which is not every case: see visibleBands.
     private var bands: [RateBand] { visibleBands(unit, granularity) }
 
@@ -206,12 +216,15 @@ final class UsageChartView: NSView {
             guard parts.minute == 0, parts.hour == 0 || parts.hour == 12 else { continue }
             let isMidnight = parts.hour == 0
             // Recessive: about the weight of the horizontal rules, with noon fainter still.
-            NSColor.separatorColor.withAlphaComponent(isMidnight ? 0.45 : 0.16).setStroke()
+            // Noon is dashed as well as fainter, so the two read apart without opacity alone —
+            // which is what lets the dashes stay this light.
+            NSColor.separatorColor.withAlphaComponent(isMidnight ? 0.45 : 0.2).setStroke()
             let line = NSBezierPath()
             let x = (plot.minX + slotWidth * CGFloat(index)).rounded() + 0.5
             line.move(to: CGPoint(x: x, y: plot.minY))
             line.line(to: CGPoint(x: x, y: plot.maxY))
             line.lineWidth = 1
+            if !isMidnight { line.setLineDash([4, 4], count: 2, phase: 0) }
             line.stroke()
         }
     }
@@ -235,8 +248,8 @@ final class UsageChartView: NSView {
             } else {
                 // Snap both edges to the pixel grid. Rounding only the origin leaves a sub-pixel
                 // sliver of background between neighbours, which draws as a hairline.
-                let edge = (plot.minX + slot * CGFloat(index)).rounded()
-                let nextEdge = (plot.minX + slot * CGFloat(index + 1)).rounded()
+                let edge = snapToPixel(plot.minX + slot * CGFloat(index))
+                let nextEdge = snapToPixel(plot.minX + slot * CGFloat(index + 1))
                 left = edge
                 width = max(1, nextEdge - edge - barGap)
             }

@@ -139,6 +139,33 @@ These were all found the hard way; each one produced a plausible-looking wrong a
 - **`costOfUsage` may be disabled** (`costEnabled: false`) on an account. `property.measurements`
   is the reliable route.
 - **Gas `deviceId` filtering returns "Unauthorized"**; filter by MPRN via `marketSupplyPointId`.
+- **Octoplus is not reachable with a customer API key.** `octoplusAccountInfo` answers — it
+  reported `ENROLLED` and `isLoyaltyPointsUser: true` — but `loyaltyPointsBalance` and
+  `loyaltyPointLedgers` both return "Unauthorized", and `octoplusFeatureFlags` answers `true` to
+  everything without any auth at all, so neither is evidence the data is available. There is also
+  **no Saving Sessions, Free Electricity or Wheel of Fortune anywhere in the schema** — those are
+  app-only and live behind different auth. Do not plan features around them.
+- **`smartMeterTelemetry` needs a Home Mini, not just a smart meter.** It offers `demand` in
+  watts, `consumptionDelta` in Wh and `costDeltaWithTax` in pence, grouped from `TEN_SECONDS` to
+  `HOURLY` — but keyed on a CAD being paired to the home area network. On an account without one
+  it returns **no rows and no error** at every grouping, over at least eight days, which reads
+  exactly like a wrong query. Check `smartDeviceNetwork(deviceId:)` first: it lists the HAN, and
+  if that shows only ESME/GSME/PPMID/CHF/GPF there is no Home Mini and telemetry will never
+  return anything. The development account has none, so this whole area is unexercised.
+- **`smartDevices` is a list**, though introspection's `ofType` chain reports it as a single
+  `SmartMeterDeviceType` unless you keep the `LIST` kind while unwrapping.
+- **`SmartFlexVehicle.chargePointPowerOutput` gives the charger's rating directly** (7.000 on the
+  development account), alongside `vehicleBatterySize`. Use it rather than inferring a charge rate
+  from consumption — inferring it is what produced the wrong 5.2 kW figure.
+- **`SmartFlexVehicleChargingPreferences` is declared but implemented by nothing.** The live type
+  behind `SmartFlexVehicle.preferences` is `SmartFlexDevicePreferences`: `targetType`, `unit`,
+  `mode` and a `schedules` array of `{dayOfWeek, time, min, max, upperLimit}`. Times are local, so
+  a 07:00 ready-by shows as an 06:00Z session end in summer.
+- **`chargingSessions.energyAdded` is sometimes impossible.** Four of five sessions matched
+  `stateOfChargeChange` × `vehicleBatterySize` to within charging losses; the fifth reported
+  76.35 kWh for a 20% change on a 49.2 kWh battery, which also exceeds what 7 kW could deliver in
+  the session's 8.6 hours. `cost` was null on every row. If this is ever used, validate each row
+  against ΔSoC × battery size and discard the ones that fail.
 - **`DAILY` and `INTERVALIZED` are rejected** as aggregation intervals. `THIRTY_MIN_INTERVAL`,
   `HOUR_INTERVAL`, `DAY_INTERVAL`, `WEEK_INTERVAL`, `MONTH_INTERVAL` and `POINT_IN_TIME` work.
   `POINT_IN_TIME` returns the cumulative meter register, not consumption.
@@ -231,8 +258,14 @@ against real data. Treat those paths as unverified.
 - **Axis steps are chosen before the maximum.** Picking the maximum and quartering it gives ticks
   like 1.25 / 2.5 / 3.75. `axisScale` picks a round step from 1, 2, 2.5, 5 × a power of ten and
   takes the finest needing six lines or fewer.
-- **Half-hourly bars snap both edges to the pixel grid.** Rounding only the origin leaves a
-  sub-pixel sliver that renders as a hairline between bars — 396 of them before this was fixed.
+- **Half-hourly bars snap both edges to the device pixel grid**, via `snapToPixel`. Rounding only
+  the origin leaves a sub-pixel sliver that renders as a hairline between bars — 396 of them
+  before this was fixed. Snapping to whole *points* fixes the hairlines but makes bars alternate
+  1pt and 2pt, a visible 2:1 thickness difference, because a point is two device pixels on
+  Retina. At 336 bars in 538pt the widths go from {1.0: 134, 2.0: 202} to {1.5: 268, 2.0: 68}.
+  Some variation is unavoidable while bars are ~1.6pt wide; it shrinks as the window widens.
+  Note `--chartdemo` renders at 1x, where snapping to points and to pixels are the same, so the
+  PNGs show the worst case rather than what a Retina screen shows.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
 - **Dispatch alerts match slots within a five-minute tolerance** rather than comparing lists.
