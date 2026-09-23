@@ -20,10 +20,12 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from zoneinfo import ZoneInfo
 
 GRAPHQL = "https://api.octopus.energy/v1/graphql/"
 CARBON = "https://api.carbonintensity.org.uk"
 ELEXON = "https://data.elexon.co.uk/bmrs/api/v1"
+LONDON = ZoneInfo("Europe/London")
 
 # Octopus's own published line between green and not-so-green.
 GREEN_THRESHOLD = 100
@@ -187,51 +189,84 @@ def fetch_national_mix(start, end):
     }
 
 
+def settlement_ref(when):
+    """Elexon numbers settlement periods from local midnight and dates a day by its local date."""
+    local = when.astimezone(LONDON)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.strftime("%Y-%m-%d"), int((local - midnight).total_seconds() // 1800) + 1
+
+
 def fetch_demand(start, end):
     """GB demand in MW: settled outturn, then the national demand forecast.
 
-    The forecast is republished every half hour or so and each publication is its own block — an
-    intraday update covering the rest of today, or the once-a-day issue covering tomorrow. The
-    plain endpoint returns only the *newest* publication and ignores from/to when selecting it, so
-    no single call covers 48 hours and which block the newest one is changes through the morning.
-    Walk back through publications instead, newest first, until the window is covered.
+    The forecast is republished every half hour and each publication is its own block — usually an
+    intraday update covering the rest of today, and once a day the day-ahead issue covering
+    tomorrow. The plain endpoint returns only the newest publication and ignores from/to when
+    selecting it, so it alone never covers 48 hours; and walking back one publication at a time
+    does not reach the day-ahead issue, which is already several updates back by mid-morning.
+
+    So take the newest publication, then ask /evolution which publication covers the first half
+    hour still missing and fetch that whole block by its publish time.
     """
     demand = {}
+
+    def absorb(body, field):
+        added = 0
+        for row in (body or {}).get("data") or []:
+            if row.get(field) is None:
+                continue
+            key = slot_key(parse(row["startTime"]))
+            # Loaded newest-first, so the first value for a slot is the freshest.
+            if key not in demand:
+                demand[key] = float(row[field])
+                added += 1
+        return added
+
     # Settled demand first: it is measurement, and a forecast must never overwrite it.
-    outturn = (
-        f"{ELEXON}/demand/outturn?settlementDateFrom={start:%Y-%m-%d}"
-        f"&settlementDateTo={end:%Y-%m-%d}&format=json"
+    absorb(
+        get(
+            f"{ELEXON}/demand/outturn?settlementDateFrom={start:%Y-%m-%d}"
+            f"&settlementDateTo={end:%Y-%m-%d}&format=json"
+        ),
+        "initialDemandOutturn",
     )
-    for row in (get(outturn) or {}).get("data") or []:
-        if row.get("initialDemandOutturn") is not None:
-            demand[slot_key(parse(row["startTime"]))] = float(row["initialDemandOutturn"])
 
     now = dt.datetime.now(dt.timezone.utc)
     if end <= now:
         return demand  # fully settled; a forecast has nothing to add
 
-    cursor = now
-    wanted = range(slot_key(now), slot_key(end - dt.timedelta(seconds=1)) + 1)
-    for _ in range(4):
-        url = f"{ELEXON}/forecast/demand/day-ahead/history?publishTime={stamp(cursor)}&format=json"
-        rows = (get(url) or {}).get("data") or []
+    # From the next half hour: the one in progress is covered by neither outturn nor any live
+    # forecast, so looking for a publication to fill it wastes a round.
+    slots = range(slot_key(now) + 1, slot_key(end - dt.timedelta(seconds=1)) + 1)
+    absorb(
+        get(f"{ELEXON}/forecast/demand/day-ahead/history?publishTime={stamp(now)}&format=json"),
+        "nationalDemand",
+    )
+
+    for _ in range(2):
+        missing = next((s for s in slots if s not in demand), None)
+        if missing is None:
+            break
+        date, period = settlement_ref(dt.datetime.fromtimestamp(missing * 1800, dt.timezone.utc))
+        rows = (
+            get(
+                f"{ELEXON}/forecast/demand/day-ahead/evolution"
+                f"?settlementDate={date}&settlementPeriod={period}&format=json"
+            )
+            or {}
+        ).get("data") or []
         if not rows:
             break
-        added = 0
-        published = []
-        for row in rows:
-            if row.get("publishTime"):
-                published.append(parse(row["publishTime"]))
-            if row.get("nationalDemand") is None:
-                continue
-            key = slot_key(parse(row["startTime"]))
-            # Walking newest to oldest, so the first value for a slot is the freshest.
-            if key not in demand:
-                demand[key] = float(row["nationalDemand"])
-                added += 1
-        if not added or not published or all(k in demand for k in wanted):
+        newest = max(parse(r["publishTime"]) for r in rows if r.get("publishTime"))
+        added = absorb(
+            get(
+                f"{ELEXON}/forecast/demand/day-ahead/history"
+                f"?publishTime={stamp(newest)}&format=json"
+            ),
+            "nationalDemand",
+        )
+        if not added:
             break
-        cursor = min(published) - dt.timedelta(minutes=1)
     return demand
 
 

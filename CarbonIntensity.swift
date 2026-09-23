@@ -441,6 +441,22 @@ private func slotKey(_ date: Date) -> Int { Int(date.timeIntervalSince1970 / 180
 /// GB demand in MW per half hour: settled outturn for the past, day-ahead forecast for the near
 /// future. Both are asked for every time — a window can straddle now, and neither covers the
 /// other's half.
+/// Elexon numbers settlement periods from *local* midnight, half hour by half hour, and dates a
+/// settlement day by its local date. Used only to name a period when asking which publication
+/// covers it, so the two long days a year do not matter: a neighbouring period identifies the
+/// same publication.
+private func settlementRef(_ date: Date) -> (date: String, period: Int) {
+    let london = TimeZone(identifier: "Europe/London") ?? .current
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = london
+    let midnight = cal.startOfDay(for: date)
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = london
+    formatter.dateFormat = "yyyy-MM-dd"
+    return (formatter.string(from: midnight), Int(date.timeIntervalSince(midnight) / 1800) + 1)
+}
+
 func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     let iso = DateFormatter()
     iso.locale = Locale(identifier: "en_US_POSIX")
@@ -451,65 +467,81 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     day.timeZone = TimeZone(identifier: "UTC")
     day.dateFormat = "yyyy-MM-dd"
 
+    let base = "https://data.elexon.co.uk/bmrs/api/v1"
     var demand: [Int: Double] = [:]
 
-    // Settled demand first: it is measurement, and must never be overwritten by a forecast.
-    // Demand is a garnish on the mix view — a failure here leaves the bars unscaled rather than
-    // failing the whole window — so none of these throw.
-    let outturn = "https://data.elexon.co.uk/bmrs/api/v1/demand/outturn"
-        + "?settlementDateFrom=\(day.string(from: from))&settlementDateTo=\(day.string(from: to))&format=json"
-    if let url = URL(string: outturn), let body = try? await getJSONPublic(url) {
-        for row in body["data"] as? [[String: Any]] ?? [] {
-            guard let start = parseCarbonDate(row["startTime"]),
-                let value = toDouble(row["initialDemandOutturn"])
-            else { continue }
-            demand[slotKey(start)] = value
-        }
-    }
-
-    let now = Date()
-    // A window that ends in the past is fully settled; there is nothing for a forecast to add.
-    guard to > now else { return demand }
-
-    // The national demand forecast is republished every half hour or so, and each publication is
-    // its own block: an intraday update covering the rest of today, or the once-a-day issue
-    // covering tomorrow. Critically, `/forecast/demand/day-ahead` returns only the *newest*
-    // publication and ignores from/to when selecting it — asked for tomorrow's range at 08:24 it
-    // still returned today's rows. So no single call can cover 48 hours, and which block the
-    // newest one happens to be changes through the morning.
-    //
-    // Walk back through publications instead, newest first, each time asking for the one just
-    // before the last: /history returns the publication in effect at a given moment. Stop as soon
-    // as the window is covered, a call adds nothing, or the budget runs out.
-    var cursor = now
-    let lastSlot = slotKey(to.addingTimeInterval(-1))
-    for _ in 0..<4 {
-        let endpoint = "https://data.elexon.co.uk/bmrs/api/v1/forecast/demand/day-ahead/history"
-            + "?publishTime=\(iso.string(from: cursor))&format=json"
-        guard let url = URL(string: endpoint), let body = try? await getJSONPublic(url),
-            let rows = body["data"] as? [[String: Any]], !rows.isEmpty
-        else { break }
-
+    /// Takes a response's rows, keeping the first value seen for each slot. Everything here is
+    /// loaded newest-first, so the first value is the freshest.
+    @discardableResult
+    func absorb(_ body: [String: Any], field: String) -> Int {
         var added = 0
-        var earliestPublish: Date?
-        for row in rows {
-            if let published = parseCarbonDate(row["publishTime"]) {
-                earliestPublish = min(earliestPublish ?? published, published)
-            }
-            guard let start = parseCarbonDate(row["startTime"]),
-                let value = toDouble(row["nationalDemand"])
+        for row in body["data"] as? [[String: Any]] ?? [] {
+            guard let start = parseCarbonDate(row["startTime"]), let value = toDouble(row[field])
             else { continue }
             let key = slotKey(start)
-            // Walking newest to oldest, so the first value for a slot is the freshest.
             if demand[key] == nil {
                 demand[key] = value
                 added += 1
             }
         }
+        return added
+    }
 
-        let covered = (slotKey(now)...lastSlot).allSatisfy { demand[$0] != nil }
-        guard added > 0, !covered, let earliestPublish else { break }
-        cursor = earliestPublish.addingTimeInterval(-60)
+    /// Demand is a garnish on the mix view — a failure leaves the bars unscaled rather than
+    /// failing the whole window — so nothing here throws.
+    func fetch(_ endpoint: String) async -> [String: Any]? {
+        guard let url = URL(string: endpoint) else { return nil }
+        return try? await getJSONPublic(url)
+    }
+
+    // Settled demand first: it is measurement, and a forecast must never overwrite it.
+    if let body = await fetch(
+        "\(base)/demand/outturn?settlementDateFrom=\(day.string(from: from))"
+            + "&settlementDateTo=\(day.string(from: to))&format=json")
+    {
+        absorb(body, field: "initialDemandOutturn")
+    }
+
+    let now = Date()
+    // A window that ends in the past is fully settled; there is nothing for a forecast to add.
+    guard to > now else { return demand }
+    // From the *next* half hour, not this one. The period in progress is covered by neither the
+    // settled outturn nor any live forecast, so hunting for a publication to fill it burns a
+    // round of lookups on a hole that is structural.
+    let firstSlot = slotKey(now) + 1
+    let lastSlot = slotKey(to.addingTimeInterval(-1))
+    guard firstSlot <= lastSlot else { return demand }
+    let slots = firstSlot...lastSlot
+
+    // The national demand forecast is republished every half hour, and each publication is its
+    // own block: usually an intraday update covering the rest of today, and once a day the
+    // day-ahead issue covering tomorrow. `/forecast/demand/day-ahead` returns only the *newest*
+    // publication and ignores from/to when selecting it, so it alone can never cover 48 hours.
+    // Walking back one publication at a time does not work either — by mid-morning the day-ahead
+    // issue is already several intraday updates back, and by evening it is dozens.
+    //
+    // So: take the newest publication, then *ask* which publication covers the first half hour
+    // still missing. /evolution names it, and /history then fetches that whole block. Two calls
+    // per block, and no guessing at publication times.
+    if let body = await fetch("\(base)/forecast/demand/day-ahead/history"
+        + "?publishTime=\(iso.string(from: now))&format=json")
+    {
+        absorb(body, field: "nationalDemand")
+    }
+
+    for _ in 0..<2 {
+        guard let missing = slots.first(where: { demand[$0] == nil }) else { break }
+        let ref = settlementRef(Date(timeIntervalSince1970: Double(missing) * 1800))
+        guard
+            let evolution = await fetch(
+                "\(base)/forecast/demand/day-ahead/evolution"
+                    + "?settlementDate=\(ref.date)&settlementPeriod=\(ref.period)&format=json"),
+            let rows = evolution["data"] as? [[String: Any]],
+            let newest = rows.compactMap({ parseCarbonDate($0["publishTime"]) }).max(),
+            let block = await fetch("\(base)/forecast/demand/day-ahead/history"
+                + "?publishTime=\(iso.string(from: newest))&format=json"),
+            absorb(block, field: "nationalDemand") > 0
+        else { break }
     }
     return demand
 }

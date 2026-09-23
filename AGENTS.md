@@ -364,18 +364,23 @@ against real data. Treat those paths as unverified.
   nobody can justify from physics, and suppressing real variation is worse than showing a rough
   forecast. Say it is the operator's data rather than inventing a smoother.
 - **The national demand forecast is republished every half hour, and each publication is its own
-  block.** Some are intraday updates covering the rest of today; one a day is the real day-ahead
-  issue covering tomorrow. `/forecast/demand/day-ahead` returns **only the newest publication**
-  and *ignores from/to when selecting it* — asked for tomorrow's range at 08:24 it still returned
-  today's rows. So no single call covers 48 hours, and which block the newest one happens to be
-  changes through the morning: at 08:01 it was tomorrow's, at 08:24 today's, and coverage of the
-  same window fell from 88 slots to 40. Do not trust that endpoint alone.
-  `fetchGBDemand` walks back through publications instead, newest first, asking
-  `/forecast/demand/day-ahead/history?publishTime=` for the one just before the last, stopping
-  when the window is covered, a call adds nothing, or four calls are spent. Two calls typically
-  cover 88 of 96 forecast slots; the rest are past the horizon. Settled outturn is loaded first
-  and never overwritten, and the forecast calls are skipped entirely for a window ending in the
-  past.
+  block.** Usually an intraday update covering the rest of today; once a day, the day-ahead issue
+  covering tomorrow. Two things follow, both of which cost a wrong fix first:
+  - `/forecast/demand/day-ahead` returns **only the newest publication** and *ignores from/to when
+    selecting it* — asked for tomorrow's range at 08:24 it still returned today's rows. Coverage
+    of the same window swung from 88 slots to 40 within half an hour as an intraday update
+    replaced the day-ahead one.
+  - **Walking back one publication at a time does not work.** By mid-morning the day-ahead issue
+    is already several intraday updates back, and by evening dozens; a four-call walk-back stalled
+    at 38 of 96 slots because every step found another update covering only today.
+
+  What does work: take the newest publication, then **ask** which publication covers the first
+  half hour still missing. `/forecast/demand/day-ahead/evolution?settlementDate=&settlementPeriod=`
+  names it, and `/history?publishTime=` then fetches that whole block — two calls per block, no
+  guessing at publication times. Measured live: 85 of 95 forecast slots, the remainder genuinely
+  past the horizon. The search starts at the half hour *after* now, since the one in progress is
+  structural and hunting for it wastes a round. Settled outturn is loaded first and never
+  overwritten, and the forecast calls are skipped for a window ending in the past.
 - **The half hour in progress has no demand, and that is structural.** Elexon publishes a
   period's settled INDO *when the period ends* (19:30Z was published at 20:00Z), and the
   day-ahead forecast drops a period once it has started — so for up to thirty minutes the current
