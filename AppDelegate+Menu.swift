@@ -28,8 +28,13 @@ extension AppDelegate {
         } else {
             image?.isTemplate = true
         }
-        item.button?.image = image
-        item.button?.toolTip = tip
+        if let button = item.button {
+            button.image = image
+            // A nil symbol image leaves a zero-width, invisible-but-clickable status item, which
+            // reads as "the app didn't launch". Fall back to text so the item is always visible.
+            button.title = image == nil ? "⚡" : ""
+            button.toolTip = tip
+        }
     }
 
     // Called before the menu is shown, so rebuilding here is safe.
