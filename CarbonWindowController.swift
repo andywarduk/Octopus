@@ -328,13 +328,16 @@ final class CarbonWindowController: NSObject {
         if let region = series.region { parts.append(region) }
         parts.append(series.outward)
         if mode == .mix {
-            // The average over the window, which is what the legend's percentages are.
+            // The average over the window, which is what the legend's percentages are. Coal is
+            // still summed although Britain burned its last in 2024 and the figure is now always
+            // zero: the API still carries the fuel, and naming the total "fossil" rather than
+            // listing the fuels means a restart would be counted without a wording change.
             let fossil = series.readings.reduce(0.0) { total, reading in
                 total + reading.mix
                     .filter { [.gas, .coal].contains($0.fuel) }
                     .reduce(0) { $0 + $1.percent }
             } / Double(max(1, series.readings.count))
-            parts.append(String(format: "gas and coal %.0f%% on average", fossil))
+            parts.append(String(format: "fossil fuels %.0f%% on average", fossil))
             // Bar heights are GB-wide while the intensity view is regional, and the mix behind
             // them can be either. Both have to be said, or the chart implies one scope.
             parts.append(series.mixBasis)
