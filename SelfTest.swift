@@ -8,17 +8,33 @@ func selfTest() {
     func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
     let snap = Snapshot(
         cheapRate: 6.8999, peakRate: 30.3714, standingCharge: 54.81, windows: fallbackWindows,
-        dispatches: [Interval(start: date("2026-09-20T12:00:00Z"), end: date("2026-09-20T13:30:00Z"), smart: true)],
+        dispatches: [
+            Interval(
+                start: date("2026-09-20T12:00:00Z"), end: date("2026-09-20T13:30:00Z"), smart: true,
+                plannedKwh: 7.833, chargeType: "SMART")
+        ],
         cars: [
-            Car(name: "Mini Cooper", soc: 62, target: 80, readyBy: 7 * 60,
+            Car(name: "Mini Cooper", soc: 62, batteryKwh: 49.2, target: 80, readyBy: 7 * 60,
                 state: "SMART_CONTROL_NOT_AVAILABLE", asOf: date("2026-09-19T14:08:36Z")),
             Car(name: "Test EV", soc: 45, target: 80, state: "SMART_CONTROL_IN_PROGRESS", asOf: date("2026-09-19T15:10:00Z"),
                 powerKw: 7.2, powerAsOf: date("2026-09-19T15:10:00Z")),
         ],
         balancePence: 53206, projectedBalancePence: 71062,
         tariffEnds: [
-            TariffEnd(fuel: .gas, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"))
+            TariffEnd(
+                fuel: .electricity, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"),
+                property: "9 Other Road"),
+            TariffEnd(
+                fuel: .gas, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"),
+                property: "1 Test Lane"),
+            TariffEnd(
+                fuel: .gas, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"),
+                property: "9 Other Road"),
+            // The variable tariff the menu bar's prices come from: no end date, and it must
+            // still be listed.
+            TariffEnd(fuel: .electricity, name: "Intelligent Octopus Go", property: "1 Test Lane"),
         ],
+        propertyCount: 2,
         tz: tz, fetched: date("2026-09-19T15:13:00Z"))
     let then = date("2026-09-19T15:10:00Z")
     print("--- charging status")
@@ -170,6 +186,8 @@ func selfTest() {
     let accountNode: [String: Any] = [
         "properties": [
             [
+                "id": "236766",
+                "address": "1 Test Lane, Corsham, SN13 9XX",
                 "electricityMeterPoints": [
                     ["agreements": [
                         ["validFrom": "2026-08-23T23:00:00+00:00", "validTo": NSNull(),
@@ -197,19 +215,41 @@ func selfTest() {
                          "tariff": ["displayName": "Octopus 12M Fixed"]]
                     ]],
                 ],
-            ]
+            ],
+            // A second address, with a tariff of its own. Its expiry must be named, not shown as
+            // though it belonged to the property the rest of the menu is about.
+            [
+                "id": "2897476",
+                "address": "9 Other Road, Corsham, SN13 0YY",
+                // A tariff only this address is on: the line must name it.
+                "electricityMeterPoints": [
+                    ["agreements": [
+                        ["validFrom": "2025-10-08T23:00:00+00:00", "validTo": "2026-10-20T23:00:00+00:00",
+                         "tariff": ["displayName": "Octopus 24M Fixed"]]
+                    ]]
+                ],
+                "gasMeterPoints": [
+                    ["agreements": [
+                        ["validFrom": "2025-10-08T23:00:00+00:00", "validTo": "2026-10-08T23:00:00+00:00",
+                         "tariff": ["displayName": "Octopus 12M Fixed"]]
+                    ]]
+                ],
+            ],
         ]
     ]
+    let places = propertyCount(accountNode)
     let parsedEnds = parseTariffEnds(accountNode, now: date("2026-09-22T12:00:00Z"))
     for end in parsedEnds {
         // The raw instant is midnight, so the last covered day is the one before it.
-        let last = lastCoveredDay(end, tzLondon)
-        print("    \(end.fuel.rawValue) \(end.name) -> validTo \(formatted(end.ends, "EEE d MMM HH:mm", tzLondon)), "
-            + "last day \(formatted(last, "EEE d MMM yyyy", tzLondon)) "
-            + "(\(daysUntil(last, now: date("2026-09-22T12:00:00Z"), tzLondon)) days)")
+        let last = end.ends.map { lastCoveredDay($0, tzLondon) }
+        print("    \(end.fuel.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0)) "
+            + "\(end.name.padding(toLength: 24, withPad: " ", startingAt: 0)) "
+            + "\(end.property.padding(toLength: 14, withPad: " ", startingAt: 0)) "
+            + (last.map { "last day \(formatted($0, "EEE d MMM yyyy", tzLondon))" } ?? "no end date"))
     }
-    print("    shown within \(tariffNoticePeriod) days: "
-        + "\(endingSoon(parsedEnds, now: date("2026-09-22T12:00:00Z"), tz: tzLondon).count) of \(parsedEnds.count)")
+    print("    \(parsedEnds.count) agreements, \(places) properties; "
+        + "\(endingSoon(parsedEnds, now: date("2026-09-22T12:00:00Z"), tz: tzLondon).count) end within "
+        + "\(tariffNoticePeriod) days")
 
     print("  tariff alert thresholds (daysLeft, already alerted -> new alert):")
     for (days, alerted) in [(45, nil), (30, nil), (16, 30), (16, nil), (14, 30), (7, 14), (1, 7), (0, 1), (0, nil)]
@@ -485,6 +525,53 @@ func selfTest() {
 
     // The alert fires in both directions now, so the rule has to name the right one. A merged
     // window must not produce a change in its middle, where nothing actually changes.
+    print("  account and tariff sections (single-property account adds no addresses):")
+    var oneHouse = snap
+    oneHouse.propertyCount = 1
+    oneHouse.tariffEnds = [
+        TariffEnd(fuel: .electricity, name: "Intelligent Octopus Go", property: "1 Test Lane"),
+        TariffEnd(
+            fuel: .gas, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"),
+            property: "1 Test Lane"),
+    ]
+    for line in accountLines(oneHouse, now: date("2026-09-19T15:13:00Z"))
+        + tariffLines(oneHouse, now: date("2026-09-19T15:13:00Z"))
+    {
+        switch line {
+        case .header(let t): print("    [\(t)]")
+        case .text(let t): print("    \(t)")
+        case .separator: break
+        }
+    }
+
+    print("  planned charge line:")
+    func withPlan(_ slots: [(String, String, Double?, String)]) -> Snapshot {
+        var copy = snap
+        copy.dispatches = slots.map {
+            Interval(start: date($0.0), end: date($0.1), smart: true, plannedKwh: $0.2, chargeType: $0.3)
+        }
+        return copy
+    }
+    let atNoon = date("2026-09-19T15:13:00Z")
+    for (label, snapshot) in [
+        ("one smart slot", withPlan([("2026-09-19T23:30:00Z", "2026-09-20T03:00:00Z", 18.277, "SMART")])),
+        ("two slots, summed",
+         withPlan([
+            ("2026-09-19T23:30:00Z", "2026-09-20T03:00:00Z", 18.277, "SMART"),
+            ("2026-09-20T04:30:00Z", "2026-09-20T05:00:00Z", 1.7275, "SMART"),
+         ])),
+        ("a boost", withPlan([("2026-09-19T20:00:00Z", "2026-09-19T21:00:00Z", 5.2, "BOOST")])),
+        // The planner does not always say how much, and a slot with no energy must not print
+        // "about 0 kWh".
+        ("no energy stated", withPlan([("2026-09-19T23:30:00Z", "2026-09-20T03:00:00Z", nil, "SMART")])),
+        ("nothing planned", withPlan([])),
+        // Slots already finished are not the plan any more.
+        ("only past slots", withPlan([("2026-09-19T06:00:00Z", "2026-09-19T07:00:00Z", 9.0, "SMART")])),
+    ] {
+        print("    \(label.padding(toLength: 20, withPad: " ", startingAt: 0)): "
+            + (plannedChargeLine(snapshot, now: atNoon) ?? "(no line)"))
+    }
+
     print("  next rate change:")
     let window = [
         Interval(start: date("2026-09-19T22:30:00Z"), end: date("2026-09-20T04:30:00Z"), smart: false),

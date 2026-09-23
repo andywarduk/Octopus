@@ -72,7 +72,8 @@ extension AppDelegate {
                 case .header(let t):
                     menu.addItem(infoItem(t, font: .boldSystemFont(ofSize: NSFont.systemFontSize), color: .labelColor))
                 case .text(let t):
-                    let detail = t.hasPrefix("    ") || t.hasPrefix("Updated")
+                    // Indented lines are details; so is the footnote under the prices.
+                    let detail = t.hasPrefix("    ") || t.hasPrefix("Prices include")
                     menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: detail ? .secondaryLabelColor : .labelColor))
                 }
             }

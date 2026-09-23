@@ -50,26 +50,54 @@ let fallbackWindows = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
 /// Takes the raw `account` node so it can be exercised without the network. Agreements with no
 /// `validTo` are variable tariffs that never run out, and are not included. Two meters on the same
 /// tariff ending the same day collapse into one entry — that is one thing to be told about.
+/// Every active agreement on the account, one entry per meter point, never merged.
+///
+/// Includes variable tariffs, which have no `validTo` — Intelligent Octopus Go is one, and it is
+/// the very tariff the menu bar's prices come from, so leaving it out made the menu silent about
+/// it. Two houses on the same tariff stay two entries: the list is what the account holds.
 func parseTariffEnds(_ account: [String: Any], now: Date) -> [TariffEnd] {
-    var found: [String: TariffEnd] = [:]
+    var found: [TariffEnd] = []
     for property in (account["properties"] as? [[String: Any]]) ?? [] {
+        // The first line of the address, as the meter picker shows it.
+        let address = property["address"] as? String ?? ""
+        let place = address.split(separator: ",").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
         for (field, fuel) in [("electricityMeterPoints", Fuel.electricity), ("gasMeterPoints", .gas)] {
             for point in (property[field] as? [[String: Any]]) ?? [] {
                 for agreement in (point["agreements"] as? [[String: Any]]) ?? [] {
+                    let ends = parseDate(agreement["validTo"])
                     guard
                         agreement["isRevoked"] as? Bool != true,
-                        let ends = parseDate(agreement["validTo"]), ends > now,
-                        // An agreement that hasn't started yet is the replacement, not the expiry.
+                        // Already over, or not started yet — the latter is the replacement
+                        // waiting to take over, not something in force.
+                        ends.map({ $0 > now }) ?? true,
                         parseDate(agreement["validFrom"]).map({ $0 <= now }) ?? true
                     else { continue }
                     let name = (agreement["tariff"] as? [String: Any])?["displayName"] as? String
-                    let end = TariffEnd(fuel: fuel, name: name ?? "\(fuel.title) tariff", ends: ends)
-                    found[end.key] = end
+                    found.append(
+                        TariffEnd(
+                            fuel: fuel, name: name ?? "\(fuel.title) tariff", ends: ends,
+                            property: place))
                 }
             }
         }
     }
-    return found.values.sorted { $0.ends < $1.ends }
+    // Soonest expiry first, with the never-ending ones last; then by address so a property's
+    // agreements sit together.
+    return found.sorted {
+        switch ($0.ends, $1.ends) {
+        case let (a?, b?) where a != b: return a < b
+        case (nil, _?): return false
+        case (_?, nil): return true
+        default: return ($0.property, $0.fuel.rawValue) < ($1.property, $1.fuel.rawValue)
+        }
+    }
+}
+
+/// How many distinct addresses the account holds, so a tariff covering all of them needs no
+/// naming and one covering a single address does.
+func propertyCount(_ account: [String: Any]) -> Int {
+    (account["properties"] as? [[String: Any]])?.count ?? 0
 }
 
 /// Today's charging goal: the target state of charge and the time it should be reached by.
@@ -116,10 +144,12 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
           balance
           projectedBalance
           electricityAgreements(active:true){
+            validTo
             meterPoint{mpan direction}
             timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
             tariff{
               __typename
+              ... on TariffType{displayName}
               ... on StandardTariff{unitRate standingCharge}
               ... on PrepayTariff{unitRate standingCharge}
               ... on DayNightTariff{dayRate nightRate standingCharge}
@@ -130,6 +160,8 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
             }
           }
           properties{
+            id
+            address
             electricityMeterPoints{
               agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
             }
@@ -150,23 +182,94 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
 
     let now = Date()
     let iso = ISO8601DateFormatter()
+
+    // The schedule first: the device parsing below needs the property's timezone.
+    let scheme = agreement["timeOfUseScheme"] as? [String: Any]
+    let tz = TimeZone(identifier: scheme?["timezone"] as? String ?? "") ?? TimeZone(identifier: "Europe/London")!
+    var windows: [(from: Int, to: Int)] = []
+    for slot in (scheme?["timeslots"] as? [[String: Any]]) ?? [] {
+        let name = (slot["timeslot"] as? String ?? "").lowercased()
+        guard ["off", "cheap", "night"].contains(where: name.contains),
+            let from = minutes(slot["activeFrom"] as? String ?? ""),
+            let to = minutes(slot["activeTo"] as? String ?? "")
+        else { continue }
+        windows.append((from, to))
+    }
+    if windows.isEmpty { windows = fallbackWindows }
+
+    // Devices before rates, because the planned-dispatch query is per device: their ids have to
+    // be known before the rates request can ask for the charge plan in the same round trip.
+    var cars: [Car] = []
+    var deviceIds: [String] = []
+    do {
+        let dev = try await gql(
+            """
+            query($a:String!){devices(accountNumber:$a){
+              __typename id name
+              ... on SmartFlexVehicle{
+                make model vehicleBatterySize
+                status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
+                preferences{unit schedules{dayOfWeek time max upperLimit}}
+              }
+              ... on SmartFlexChargePoint{
+                status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
+              }
+            }}
+            """, ["a": account], token: token)
+        for d in (dev["devices"] as? [[String: Any]]) ?? [] {
+            let type = d["__typename"] as? String
+            guard type == "SmartFlexVehicle" || type == "SmartFlexChargePoint" else { continue }
+            if let id = d["id"] as? String { deviceIds.append(id) }
+            let status = d["status"] as? [String: Any]
+            let soc = status?["stateOfCharge"] as? [String: Any]
+            let power = status?["activePower"] as? [String: Any]
+            let goal = todaysChargeGoal(d["preferences"] as? [String: Any], now: now, tz: tz)
+            let label = [d["make"], d["model"]].compactMap { $0 as? String }.joined(separator: " ")
+            cars.append(
+                Car(
+                    name: label.isEmpty ? (d["name"] as? String ?? "Vehicle") : label,
+                    soc: toDouble(soc?["value"]),
+                    batteryKwh: toDouble(d["vehicleBatterySize"]),
+                    target: goal.target,
+                    readyBy: goal.readyBy,
+                    state: status?["currentState"] as? String,
+                    asOf: parseDate(soc?["timestamp"]),
+                    powerKw: toDouble(power?["value"]),
+                    powerAsOf: parseDate(power?["timestamp"]),
+                    suspended: status?["isSuspended"] as? Bool))
+        }
+    } catch {
+        // Charge level is secondary; the rate display still works without it.
+    }
+
+    // `plannedDispatches` is deprecated — and gave only start and end. `flexPlannedDispatches`
+    // also carries the planned energy and whether a slot is a smart charge or a boost, but it is
+    // per device, so one alias per device keeps it to a single request however many there are.
+    var flexDefs = ""
+    var flexFields = ""
+    var flexVariables: [String: Any] = [:]
+    for (index, id) in deviceIds.enumerated() {
+        flexDefs += ",$d\(index):String!"
+        flexFields += "\n  f\(index): flexPlannedDispatches(deviceId:$d\(index)){start end type energyAddedKwh}"
+        flexVariables["d\(index)"] = id
+    }
+
     let ratesQuery = """
-        query($a:String!,$m:String!,$s:DateTime!,$e:DateTime!,$n:Int!){
+        query($a:String!,$m:String!,$s:DateTime!,$e:DateTime!,$n:Int!\(flexDefs)){
           applicableRates(accountNumber:$a,mpxn:$m,startAt:$s,endAt:$e,first:$n){edges{node{value}}}
-          plannedDispatches(accountNumber:$a){start end}
-          completedDispatches(accountNumber:$a){start end}
+          completedDispatches(accountNumber:$a){start end}\(flexFields)
         }
         """
     var ratesData: [String: Any]?
     var lastError = ""
     for size in [100, 50, 25, 10] {
         do {
-            ratesData = try await gql(
-                ratesQuery,
-                [
-                    "a": account, "m": mpan, "n": size,
-                    "s": iso.string(from: now), "e": iso.string(from: now.addingTimeInterval(24 * 3600)),
-                ], token: token)
+            var variables: [String: Any] = [
+                "a": account, "m": mpan, "n": size,
+                "s": iso.string(from: now), "e": iso.string(from: now.addingTimeInterval(24 * 3600)),
+            ]
+            variables.merge(flexVariables) { current, _ in current }
+            ratesData = try await gql(ratesQuery, variables, token: token)
             break
         } catch let e as ApiError {
             lastError = e.message
@@ -196,63 +299,23 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
     }
     let standingCharge = toDouble(tariff["standingCharge"])
 
-    let scheme = agreement["timeOfUseScheme"] as? [String: Any]
-    let tz = TimeZone(identifier: scheme?["timezone"] as? String ?? "") ?? TimeZone(identifier: "Europe/London")!
-    var windows: [(from: Int, to: Int)] = []
-    for slot in (scheme?["timeslots"] as? [[String: Any]]) ?? [] {
-        let name = (slot["timeslot"] as? String ?? "").lowercased()
-        guard ["off", "cheap", "night"].contains(where: name.contains),
-            let from = minutes(slot["activeFrom"] as? String ?? ""),
-            let to = minutes(slot["activeTo"] as? String ?? "")
-        else { continue }
-        windows.append((from, to))
-    }
-    if windows.isEmpty { windows = fallbackWindows }
-
-    let dispatchRows = ((rd["plannedDispatches"] as? [[String: Any]]) ?? []) + ((rd["completedDispatches"] as? [[String: Any]]) ?? [])
-    let dispatches = dispatchRows.compactMap { row -> Interval? in
-        guard let s = parseDate(row["start"]), let e = parseDate(row["end"]) else { return nil }
-        return Interval(start: s, end: e, smart: true)
-    }
-
-    var cars: [Car] = []
-    do {
-        let dev = try await gql(
-            """
-            query($a:String!){devices(accountNumber:$a){
-              __typename id name
-              ... on SmartFlexVehicle{
-                make model
-                status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
-                preferences{unit schedules{dayOfWeek time max upperLimit}}
-              }
-              ... on SmartFlexChargePoint{
-                status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
-              }
-            }}
-            """, ["a": account], token: token)
-        for d in (dev["devices"] as? [[String: Any]]) ?? [] {
-            let type = d["__typename"] as? String
-            guard type == "SmartFlexVehicle" || type == "SmartFlexChargePoint" else { continue }
-            let status = d["status"] as? [String: Any]
-            let soc = status?["stateOfCharge"] as? [String: Any]
-            let power = status?["activePower"] as? [String: Any]
-            let goal = todaysChargeGoal(d["preferences"] as? [String: Any], now: now, tz: tz)
-            let label = [d["make"], d["model"]].compactMap { $0 as? String }.joined(separator: " ")
-            cars.append(
-                Car(
-                    name: label.isEmpty ? (d["name"] as? String ?? "Vehicle") : label,
-                    soc: toDouble(soc?["value"]),
-                    target: goal.target,
-                    readyBy: goal.readyBy,
-                    state: status?["currentState"] as? String,
-                    asOf: parseDate(soc?["timestamp"]),
-                    powerKw: toDouble(power?["value"]),
-                    powerAsOf: parseDate(power?["timestamp"]),
-                    suspended: status?["isSuspended"] as? Bool))
+    var dispatches: [Interval] = []
+    for index in deviceIds.indices {
+        for row in (rd["f\(index)"] as? [[String: Any]]) ?? [] {
+            guard let from = parseDate(row["start"]), let to = parseDate(row["end"]) else { continue }
+            // Energy is stated negative for import; the sign says nothing the label doesn't.
+            dispatches.append(
+                Interval(
+                    start: from, end: to, smart: true,
+                    plannedKwh: toDouble(row["energyAddedKwh"]).map(abs),
+                    chargeType: row["type"] as? String))
         }
-    } catch {
-        // Charge level is secondary; the rate display still works without it.
+    }
+    // Completed slots carry no plan any more, and are kept only so a charge that has just run
+    // still counts as a cheap window.
+    for row in (rd["completedDispatches"] as? [[String: Any]]) ?? [] {
+        guard let from = parseDate(row["start"]), let to = parseDate(row["end"]) else { continue }
+        dispatches.append(Interval(start: from, end: to, smart: true))
     }
 
     return Snapshot(
@@ -261,5 +324,6 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
         balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
         projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
         tariffEnds: parseTariffEnds(accountNode, now: now),
+        propertyCount: propertyCount(accountNode),
         tz: tz, fetched: now)
 }

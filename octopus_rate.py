@@ -93,27 +93,30 @@ def todays_charge_goal(preferences, now_local):
 
 
 def tariff_ends(account_node, now):
-    """Fixed agreements that haven't ended, soonest first.
+    """Every active agreement, one per meter point, never merged.
 
-    An agreement with no `validTo` is a variable tariff and never runs out. One that hasn't
-    started yet is the replacement, not the expiry. Two meters on the same tariff ending the same
-    day are one thing to be told about, so they collapse.
+    Includes variable tariffs, which have no `validTo` — Intelligent Octopus Go is one, and it is
+    the tariff the prices above come from. An agreement that hasn't started yet is the replacement
+    waiting to take over, not something in force.
     """
-    found = {}
+    rows = []
     for prop in account_node.get("properties") or []:
+        address = prop.get("address") or ""
+        place = address.split(",")[0].strip()
         for field, fuel in (("electricityMeterPoints", "electricity"), ("gasMeterPoints", "gas")):
             for point in prop.get(field) or []:
                 for agreement in point.get("agreements") or []:
-                    if agreement.get("isRevoked") or not agreement.get("validTo"):
+                    if agreement.get("isRevoked"):
                         continue
-                    ends = parse(agreement["validTo"])
-                    if ends <= now:
+                    ends = parse(agreement["validTo"]) if agreement.get("validTo") else None
+                    if ends is not None and ends <= now:
                         continue
                     if agreement.get("validFrom") and parse(agreement["validFrom"]) > now:
                         continue
                     name = (agreement.get("tariff") or {}).get("displayName") or f"{fuel} tariff"
-                    found[(fuel, name, ends)] = (fuel, name, ends)
-    return sorted(found.values(), key=lambda row: row[2])
+                    rows.append((fuel, name, ends, place))
+    # Soonest expiry first, the never-ending ones last, then grouped by address.
+    return sorted(rows, key=lambda r: (r[2] is None, r[2] or now, r[3], r[0]))
 
 
 def balance_text(pence):
@@ -192,10 +195,12 @@ account_node = run(
       balance
       projectedBalance
       electricityAgreements(active:true){
+        validTo
         meterPoint{mpan direction}
         timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
         tariff{
           __typename
+          ... on TariffType{displayName}
           ... on StandardTariff{unitRate standingCharge}
           ... on PrepayTariff{unitRate standingCharge}
           ... on DayNightTariff{dayRate nightRate standingCharge}
@@ -204,6 +209,7 @@ account_node = run(
         }
       }
       properties{
+        address
         electricityMeterPoints{agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}}
         gasMeterPoints{agreements{validFrom validTo tariff{... on TariffType{displayName}}}}
       }
@@ -316,7 +322,7 @@ else:
 DEVICES_QUERY = """query($a:String!){devices(accountNumber:$a){
   __typename id name
   ... on SmartFlexVehicle{
-    make model
+    make model vehicleBatterySize
     status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
     preferences{unit schedules{dayOfWeek time max upperLimit}}
   }
@@ -350,6 +356,10 @@ for dev in devices:
     if target is not None:
         line += f" (target {target}%" + (f" by {ready_by})" if ready_by else ")")
     print(line)
+    # Derived from two figures the API gives, so "about": the state of charge arrives rounded.
+    capacity = to_float(dev.get("vehicleBatterySize"))
+    if capacity:
+        print(f"    About {capacity * value / 100:.1f} of {capacity:.1f} kWh in the battery")
     state = charging_status(status, now)
     if state:
         print(f"    {state}")
@@ -366,13 +376,16 @@ if balance is not None:
     print(line)
 
 # How far ahead an ending tariff is worth mentioning.
-NOTICE_DAYS = 60
-for fuel, name, ends in tariff_ends(account_node, now):
+places = len(account_node.get("properties") or [])
+for fuel, name, ends, place in tariff_ends(account_node, now):
+    # The address only earns its place when the account holds more than one.
+    at = f" at {place}" if places > 1 and place else ""
+    if ends is None:
+        print(f"{name} ({fuel}){at} — no end date")
+        continue
     # validTo is the instant cover stops, and these end at midnight — so the raw date is the first
     # day of the next tariff. Step back a second for the last day actually covered.
     last = (ends - timedelta(seconds=1)).astimezone(tz)
     days = (last.date() - now_local.date()).days
-    if days > NOTICE_DAYS:
-        continue
     when = "today" if days <= 0 else "tomorrow" if days == 1 else f"in {days} days"
-    print(f"{name} ({fuel}) ends {last:%a} {last.day} {last:%b} — {when}")
+    print(f"{name} ({fuel}){at} ends {last:%a} {last.day} {last:%b} — {when}")

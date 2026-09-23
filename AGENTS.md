@@ -183,6 +183,24 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   a plain `__type(...){fields{name}}` yet still answers queries; it is deprecated in favour of
   `preferences`. Pass `fields(includeDeprecated:true)` before concluding a field the code already
   uses has been removed.
+- **`plannedDispatches` is deprecated, and gave only start and end.** `flexPlannedDispatches`
+  also carries `energyAddedKwh` and `type` (`SMART` / `BOOST` / `TEST`), but it is keyed by
+  **device**, so the device list has to be fetched before it — one alias per device keeps it to a
+  single request however many there are. `completedDispatches` stays keyed by account and gains
+  `delta` (kWh, import negative) and `meta.location`. Like `chargingPreferences`, the deprecation
+  is invisible without `fields(includeDeprecated:true)`.
+- **The charge held in the battery is derived, not reported.** `SmartFlexVehicle` gives
+  `vehicleBatterySize` (usable capacity) and the status gives a state of charge, and the app
+  multiplies them. Shown as "about" because the percentage arrives rounded and one percent of a
+  49 kWh battery is half a kilowatt-hour. A car that reports no capacity simply omits the line.
+- **`energyAddedKwh` is the planner's arithmetic, not a measurement.** On the development account
+  a plan of 18.277 kWh over seven half hours is *exactly* 7 × 2.611 — the same constant as the
+  `EV_DEVICE_OFF_PEAK` billing allocation, which is 5.222 kW flat. The last slot is a partial
+  top-up to the target state of charge. So it is fine for "about N kWh planned" and must never be
+  charted as what the car drew; that is the same trap the per-device buckets set.
+  `completedDispatches.delta` looks different in kind — 2.65 kWh against the allocation's 2.611,
+  and trickle values of 0.04–0.07 kWh that no allocation would produce — but only four rows came
+  back, all from the same day, so there is no history to plot even if it is sound.
 - **An outward code is not a postcode with three characters lopped off.** `outwardCode`/
   `outward_code` only strip the inward part from something long enough to have one: `"SN13"` given
   on its own is already the answer, and dropping three characters leaves `"S"`, which both APIs
@@ -416,13 +434,15 @@ against real data. Treat those paths as unverified.
   PNGs show the worst case rather than what a Retina screen shows.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
-- **Menu order is current rate, upcoming cheap rate, cars, account, footer**, then the action
+- **Menu order is current rate, upcoming cheap rate, cars, account, tariffs**, then the action
   items: Electricity Use…, Gas Use…, Refresh Now, Settings…, Quit. The informational sections come
   from `menuLines`, which `--selftest` prints at three moments; the action items are built in
   `rebuildMenu` and are not covered by any test, so check those in the running app.
   A single-rate tariff skips the upcoming-cheap section rather than showing it empty — that used
   to be an early return, which forced the section to be last, and is now an `if` so the order is
-  free to change.
+  free to change. The VAT and standing-charge footnote sits directly under the prices it
+  qualifies rather than at the foot of the menu, and `rebuildMenu` renders it in secondary ink by
+  matching its "Prices include" prefix, the same way it treats indented detail lines.
 - **`octopus_rate.py` mirrors the same order** and the same agreement and charge-goal rules. It
   shares no code with the app, so a change to one is a change to make twice.
 - **Balance and agreement dates ride on the tariff request.** Both hang off the same `account`
@@ -446,6 +466,15 @@ against real data. Treat those paths as unverified.
   alerts because there is nothing to compare against.
 - **Automatic refreshing stops after 10 consecutive failures** until "Refresh Now". Without this a
   bad key retries every 30 seconds indefinitely.
+- **The account section lists every agreement, one per meter point, merged with nothing.** Two
+  earlier shapes were both wrong: filtering to agreements *ending* dropped Intelligent Octopus Go
+  entirely, because a variable tariff has no `validTo` — so the menu never named the tariff its
+  own prices came from — and collapsing identical agreements hid which address each belonged to.
+  `parseTariffEnds` now returns one `TariffEnd` per meter point, `ends` is optional, and each
+  carries its property's short address, shown only when the account holds more than one.
+  **Alerts still collapse**, through `alertKey`, which excludes the property: being told twice
+  that the same tariff ends on the same day at two houses is noise, even though the list shows
+  both. The balance stays unlabelled because it genuinely is account-wide.
 - **Meters are discovered as matched pairs.** Taking the first property and the first agreement
   independently pairs a property with another address's meter on a multi-property account.
 - **VAT-inclusive prices everywhere**, because that is what the bill says. The menu bar states it

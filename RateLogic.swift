@@ -74,6 +74,29 @@ func futureDispatches(_ s: Snapshot, now: Date) -> [Interval] {
     s.dispatches.filter { $0.end > now }.sorted { $0.start < $1.start }
 }
 
+/// What Octopus plans to put into the car, and when.
+///
+/// The energy is the planner's own arithmetic at a flat assumed rate — see `Interval.plannedKwh` —
+/// so this says "about" and stops short of claiming it is what the car will draw. Returns nil when
+/// nothing is planned or the plan states no energy.
+func plannedChargeLine(_ s: Snapshot, now: Date) -> String? {
+    let upcoming = futureDispatches(s, now: now)
+    guard !upcoming.isEmpty else { return nil }
+    let total = upcoming.compactMap(\.plannedKwh).reduce(0, +)
+    guard total > 0 else { return nil }
+
+    let slots = upcoming.prefix(3).map {
+        "\(formatted($0.start, "HH:mm", s.tz))–\(formatted($0.end, "HH:mm", s.tz))"
+    }
+    var when = slots.joined(separator: ", ")
+    if upcoming.count > slots.count { when += ", …" }
+    // A boost is one you asked for; a smart charge is one Octopus planned. Only worth saying when
+    // it isn't the ordinary case.
+    let boost = upcoming.contains { ($0.chargeType ?? "SMART").uppercased() == "BOOST" }
+    let kind = boost ? "Boost charge" : "Charging"
+    return "\(kind) \(when) · about \(String(format: "%.0f", total)) kWh planned"
+}
+
 struct DispatchChange {
     var title: String
     var body: String
@@ -207,14 +230,17 @@ let tariffNoticePeriod = 60
 /// the first day of the *next* tariff, and quoting it would put the end a day late. Stepping back
 /// a second lands on the last covered day, and is still correct for an agreement that ends at some
 /// other time of day.
-func lastCoveredDay(_ end: TariffEnd, _ tz: TimeZone) -> Date {
-    calendar(tz).startOfDay(for: end.ends.addingTimeInterval(-1))
+func lastCoveredDay(_ ends: Date, _ tz: TimeZone) -> Date {
+    calendar(tz).startOfDay(for: ends.addingTimeInterval(-1))
 }
 
 /// The end dates worth showing, soonest first.
 func endingSoon(_ ends: [TariffEnd], now: Date, tz: TimeZone, within: Int = tariffNoticePeriod) -> [TariffEnd] {
-    ends.filter { daysUntil(lastCoveredDay($0, tz), now: now, tz) <= within }
-        .sorted { $0.ends < $1.ends }
+    ends.filter { end in
+        guard let ending = end.ends else { return false }  // a variable tariff never ends
+        return daysUntil(lastCoveredDay(ending, tz), now: now, tz) <= within
+    }
+    .sorted { ($0.ends ?? .distantFuture) < ($1.ends ?? .distantFuture) }
 }
 
 /// Alert once as each of these is crossed, rather than daily for two months.
@@ -280,6 +306,7 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
             lines.append(.text("Cheap from \(stamp(next.start, now: now, tz)) (\(pence(s.cheapRate)))"))
         }
     }
+    lines.append(.text(updatedLine(s, tz: tz)))
 
     // A single-rate tariff has no windows to list, so the section is skipped rather than shown
     // empty; everything below it still applies.
@@ -300,6 +327,7 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
 
     lines.append(.separator)
     lines.append(.header(s.cars.count == 1 ? "Car" : "Cars"))
+    if let planned = plannedChargeLine(s, now: now) { lines.append(.text(planned)) }
     if s.cars.isEmpty { lines.append(.text("No smart devices found")) }
     for car in s.cars {
         if let soc = car.soc {
@@ -310,6 +338,15 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
                 title += " (\(goal))"
             }
             lines.append(.text(title))
+            // Derived from two figures the API does give, so "about": the state of charge arrives
+            // rounded, and a percent of a 49 kWh battery is half a kilowatt-hour.
+            if let capacity = car.batteryKwh, capacity > 0 {
+                lines.append(
+                    .text(
+                        String(
+                            format: "    About %.1f of %.1f kWh in the battery",
+                            capacity * soc / 100, capacity)))
+            }
             if let status = chargingStatus(car, now: now) { lines.append(.text("    " + status)) }
             if let asOf = car.asOf { lines.append(.text("    Charge level as of \(stamp(asOf, now: now, tz))")) }
         } else {
@@ -318,29 +355,39 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
     }
 
     lines += accountLines(s, now: now)
-
-    lines.append(.separator)
-    lines.append(.text(updatedLine(s, tz: tz)))
+    lines += tariffLines(s, now: now)
     return lines
 }
 
-/// Balance and any tariff about to end. Absent entirely when the account reported neither, so an
-/// account with nothing to say doesn't get an empty heading.
+/// The account's money. Absent entirely when no balance came back, so an account with nothing to
+/// say doesn't get an empty heading.
 func accountLines(_ s: Snapshot, now: Date) -> [Line] {
-    let ending = endingSoon(s.tariffEnds, now: now, tz: s.tz)
-    guard s.balancePence != nil || !ending.isEmpty else { return [] }
-    var lines: [Line] = [.separator, .header("Account")]
-    if let balance = s.balancePence {
-        lines.append(.text("Balance: \(balanceText(balance))"))
-        if let projected = s.projectedBalancePence {
-            lines.append(.text("    \(balanceText(projected)) expected in a year"))
-        }
+    guard let balance = s.balancePence else { return [] }
+    var lines: [Line] = [.separator, .header("Account"), .text("Balance: \(balanceText(balance))")]
+    if let projected = s.projectedBalancePence {
+        lines.append(.text("    \(balanceText(projected)) expected in a year"))
     }
-    for end in ending {
-        let last = lastCoveredDay(end, s.tz)
+    return lines
+}
+
+/// Every agreement the account holds, not merely the ones about to expire: a variable tariff
+/// never expires, and leaving it out meant the menu never named the tariff its prices come from.
+/// Nothing is merged — two houses on the same tariff are two agreements.
+func tariffLines(_ s: Snapshot, now: Date) -> [Line] {
+    guard !s.tariffEnds.isEmpty else { return [] }
+    var lines: [Line] = [.separator, .header(s.tariffEnds.count == 1 ? "Tariff" : "Tariffs")]
+    for end in s.tariffEnds {
+        // The address only earns its place when the account has more than one.
+        let at = s.propertyCount > 1 && !end.property.isEmpty ? " at \(end.property)" : ""
+        lines.append(.text("\(end.name) (\(end.fuel.rawValue))\(at)"))
+        guard let ending = end.ends else {
+            lines.append(.text("    No end date"))
+            continue
+        }
+        let last = lastCoveredDay(ending, s.tz)
         let days = daysUntil(last, now: now, s.tz)
-        lines.append(.text("\(end.name) (\(end.fuel.rawValue)) ends \(formatted(last, "EEE d MMM", s.tz))"))
-        lines.append(.text("    " + (days <= 0 ? "Last day today" : "In \(dayCount(days))")))
+        let when = days <= 0 ? "last day today" : "in \(dayCount(days))"
+        lines.append(.text("    Ends \(formatted(last, "EEE d MMM", s.tz)) · \(when)"))
     }
     return lines
 }

@@ -48,12 +48,17 @@ extension AppDelegate {
         let now = Date()
         var alerted = tariffAlerted
         for end in endingSoon(s.tariffEnds, now: now, tz: s.tz) {
-            let last = lastCoveredDay(end, s.tz)
+            guard let ending = end.ends else { continue }
+            let last = lastCoveredDay(ending, s.tz)
             let days = daysUntil(last, now: now, s.tz)
-            guard let threshold = tariffAlertThreshold(daysLeft: days, alerted: alerted[end.key])
+            // Keyed without the property: the list shows both houses, but being told twice that
+            // the same tariff ends on the same day is noise.
+            guard let threshold = tariffAlertThreshold(daysLeft: days, alerted: alerted[end.alertKey])
             else { continue }
-            alerted[end.key] = threshold
-            let body = "Your \(end.fuel.rawValue) tariff runs until \(formatted(last, "EEEE d MMMM", s.tz))."
+            alerted[end.alertKey] = threshold
+            let at = s.propertyCount > 1 && !end.property.isEmpty ? " at \(end.property)" : ""
+            let body = "Your \(end.fuel.rawValue) tariff\(at) runs until "
+                + "\(formatted(last, "EEEE d MMMM", s.tz))."
                 + " Check your Octopus account to choose what happens next."
             Task { await post(title: "\(end.name) ends \(dayCount(days))", body: body) }
         }
@@ -61,7 +66,7 @@ extension AppDelegate {
         // something came back: an empty list after a bad fetch would wipe the history and
         // re-alert everything next time.
         if !s.tariffEnds.isEmpty {
-            let live = Set(s.tariffEnds.map(\.key))
+            let live = Set(s.tariffEnds.map(\.alertKey))
             alerted = alerted.filter { live.contains($0.key) }
         }
         tariffAlerted = alerted
