@@ -101,13 +101,8 @@ final class CarbonChartView: NSView {
         effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
-    /// Whether the mix bars stand at demand rather than a flat 100%. Needs enough of the window
-    /// covered to be worth the axis change — a couple of settled half hours at the start of a
-    /// forecast would otherwise leave 90% of the chart as gaps.
-    private var scaledToDemand: Bool {
-        let known = readings.filter { $0.demandMW != nil }.count
-        return known * 2 >= readings.count && known > 0
-    }
+    /// Shared with the footer, so the two can never describe different charts.
+    private var scaledToDemand: Bool { carbonScaledToDemand(readings) }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

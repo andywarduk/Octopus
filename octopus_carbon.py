@@ -188,51 +188,50 @@ def fetch_national_mix(start, end):
 
 
 def fetch_demand(start, end):
-    """GB demand in MW, from the settled outturn and the day-ahead forecast.
+    """GB demand in MW: settled outturn, then the national demand forecast.
 
-    The forecast is published per settlement day, covering 04:00Z to 03:30Z, so the *latest*
-    publication is always tomorrow's block and the one covering the rest of today has been
-    superseded. Asking only for the latest leaves a hole from now until 04:00Z tomorrow, which on
-    an evening window is most of the chart, so the publication covering today is asked for by name
-    through /history. The half hour in progress is still covered by neither: its outturn publishes
-    when it ends.
+    The forecast is republished every half hour or so and each publication is its own block — an
+    intraday update covering the rest of today, or the once-a-day issue covering tomorrow. The
+    plain endpoint returns only the *newest* publication and ignores from/to when selecting it, so
+    no single call covers 48 hours and which block the newest one is changes through the morning.
+    Walk back through publications instead, newest first, until the window is covered.
     """
-    # Keyed to now, not to the window start: the stretch the settled outturn cannot cover is
-    # always today, wherever the window begins.
-    now = dt.datetime.now(dt.timezone.utc)
-    block = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    if block > now:
-        block -= dt.timedelta(days=1)
-
-    sources = [
-        (
-            f"{ELEXON}/demand/outturn?settlementDateFrom={start:%Y-%m-%d}"
-            f"&settlementDateTo={end:%Y-%m-%d}&format=json",
-            "initialDemandOutturn",
-        )
-    ]
-    # A window that ends in the past is fully settled, so neither forecast has anything to add.
-    if end > now:
-        sources += [
-            (
-                f"{ELEXON}/forecast/demand/day-ahead?from={stamp(start)}&to={stamp(end)}&format=json",
-                "nationalDemand",
-            ),
-            (
-                f"{ELEXON}/forecast/demand/day-ahead/history?publishTime={stamp(block)}&format=json",
-                "nationalDemand",
-            ),
-        ]
-
     demand = {}
-    # Order is precedence: settled outturn, then the newest forecast, then the older publication
-    # that still covers today. The first value found for a slot wins.
-    for url, field in sources:
-        for row in (get(url) or {}).get("data") or []:
-            value = row.get(field)
-            if value is None:
+    # Settled demand first: it is measurement, and a forecast must never overwrite it.
+    outturn = (
+        f"{ELEXON}/demand/outturn?settlementDateFrom={start:%Y-%m-%d}"
+        f"&settlementDateTo={end:%Y-%m-%d}&format=json"
+    )
+    for row in (get(outturn) or {}).get("data") or []:
+        if row.get("initialDemandOutturn") is not None:
+            demand[slot_key(parse(row["startTime"]))] = float(row["initialDemandOutturn"])
+
+    now = dt.datetime.now(dt.timezone.utc)
+    if end <= now:
+        return demand  # fully settled; a forecast has nothing to add
+
+    cursor = now
+    wanted = range(slot_key(now), slot_key(end - dt.timedelta(seconds=1)) + 1)
+    for _ in range(4):
+        url = f"{ELEXON}/forecast/demand/day-ahead/history?publishTime={stamp(cursor)}&format=json"
+        rows = (get(url) or {}).get("data") or []
+        if not rows:
+            break
+        added = 0
+        published = []
+        for row in rows:
+            if row.get("publishTime"):
+                published.append(parse(row["publishTime"]))
+            if row.get("nationalDemand") is None:
                 continue
-            demand.setdefault(slot_key(parse(row["startTime"])), float(value))
+            key = slot_key(parse(row["startTime"]))
+            # Walking newest to oldest, so the first value for a slot is the freshest.
+            if key not in demand:
+                demand[key] = float(row["nationalDemand"])
+                added += 1
+        if not added or not published or all(k in demand for k in wanted):
+            break
+        cursor = min(published) - dt.timedelta(minutes=1)
     return demand
 
 

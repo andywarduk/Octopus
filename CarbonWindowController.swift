@@ -338,7 +338,7 @@ final class CarbonWindowController: NSObject {
             // Bar heights are GB-wide while the intensity view is regional, and the mix behind
             // them can be either. Both have to be said, or the chart implies one scope.
             parts.append(series.mixBasis)
-            if series.hasDemand {
+            if series.scaledToDemand {
                 let now = Date()
                 // The half hour in progress is a different case from the far end of the window:
                 // it is not missing, it is not published yet, and it fills in within 30 minutes.
@@ -349,6 +349,12 @@ final class CarbonWindowController: NSObject {
                 if running > 0 { text += " · this half hour is still running" }
                 if ahead > 0 { text += " · \(ahead) half hours not forecast yet" }
                 parts.append(text)
+            } else if series.hasDemand {
+                // Some demand came back, but not enough of the window for the axis to be worth
+                // changing, so the chart is drawing shares. Say that, rather than the opposite.
+                let known = series.readings.filter { $0.demandMW != nil }.count
+                parts.append(
+                    "bars show shares — GB demand for only \(known) of \(series.readings.count) half hours")
             } else {
                 parts.append("GB demand unavailable — bars show shares")
             }

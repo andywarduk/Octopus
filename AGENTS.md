@@ -363,21 +363,19 @@ against real data. Treat those paths as unverified.
   physically make. These are left alone: catching them needs a spike heuristic with a threshold
   nobody can justify from physics, and suppressing real variation is worse than showing a rough
   forecast. Say it is the operator's data rather than inventing a smoother.
-- **The national demand forecast is published per settlement day, not rolling.** Each NDF
-  publication covers 04:00Z to 03:30Z, so the *latest* one is always tomorrow's block and the
-  publication covering the rest of today has already been superseded. Asking only
-  `/forecast/demand/day-ahead` therefore leaves a hole from now until 04:00Z tomorrow — on a
-  morning window that was 46 of 97 half hours, most of the chart. The publication covering today
-  has to be asked for by name via `/forecast/demand/day-ahead/history?publishTime=`, using the
-  most recent 04:00Z at or before **now** — not before the window start. The stretch the settled
-  outturn cannot cover is always today, wherever the window begins; keying it to the window start
-  asked a past week for its own long-gone block and left today unforecast all over again, which
-  is exactly how it looked on a week view. With that third call a forecast window went from 48 to
-  88 of 96 slots covered (the rest are genuinely past the horizon) and a current-week window from
-  304 to all 336. The forecast calls are skipped altogether when the window ends in the past,
-  since it is fully settled. The three calls are ordered by
-  precedence — settled outturn, newest forecast, then the superseded one — and the first value
-  found for a slot wins, so a stale forecast never overwrites a settled figure.
+- **The national demand forecast is republished every half hour, and each publication is its own
+  block.** Some are intraday updates covering the rest of today; one a day is the real day-ahead
+  issue covering tomorrow. `/forecast/demand/day-ahead` returns **only the newest publication**
+  and *ignores from/to when selecting it* — asked for tomorrow's range at 08:24 it still returned
+  today's rows. So no single call covers 48 hours, and which block the newest one happens to be
+  changes through the morning: at 08:01 it was tomorrow's, at 08:24 today's, and coverage of the
+  same window fell from 88 slots to 40. Do not trust that endpoint alone.
+  `fetchGBDemand` walks back through publications instead, newest first, asking
+  `/forecast/demand/day-ahead/history?publishTime=` for the one just before the last, stopping
+  when the window is covered, a call adds nothing, or four calls are spent. Two calls typically
+  cover 88 of 96 forecast slots; the rest are past the horizon. Settled outturn is loaded first
+  and never overwritten, and the forecast calls are skipped entirely for a window ending in the
+  past.
 - **The half hour in progress has no demand, and that is structural.** Elexon publishes a
   period's settled INDO *when the period ends* (19:30Z was published at 20:00Z), and the
   day-ahead forecast drops a period once it has started — so for up to thirty minutes the current
@@ -386,10 +384,12 @@ against real data. Treat those paths as unverified.
   pins the classification down. Do not "fix" the gap by interpolating or by borrowing the
   5-minutely system demand from `/demand/outturn/summary`: that series is transmission demand,
   several GW above national demand, and splicing it in would put a step in one bar.
-- **Demand is a garnish, not a dependency.** Neither demand call throws: a failure leaves the bars
+- **Demand is a garnish, not a dependency.** No demand call throws: a failure leaves the bars
   unscaled and the view falls back to percentages, rather than losing the whole window. Bars are
-  only scaled when at least half the window has demand, or the edge of the day-ahead forecast
-  would leave most of a chart as gaps.
+  only scaled when at least half the window has demand, or the edge of the forecast would leave
+  most of a chart as gaps. That rule is `carbonScaledToDemand`, used by **both** the chart and the
+  footer — they were separate, and the footer announced "bars are GB demand" while the chart,
+  short of data, had quietly fallen back to percentages.
 - **The mix stack is normalised to each column's own total.** The shares are rounded at source and
   can add to 100.1, which draws a sliver above a fixed 100% axis and reads as a bug.
 - **The chart palette is validated**, not chosen by eye. Off-peak green `#1baf7a` / `#199e70`,
