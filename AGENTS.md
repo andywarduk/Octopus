@@ -197,7 +197,10 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   over past usage. National Grid's free API (`api.carbonintensity.org.uk`, no key) serves 48 hours
   forward, arbitrary history and the generation mix, and matched Octopus within 2 gCO₂.
 - **National Grid's regional history is not capped at 48 hours.** A seven-day range returns all
-  337 half hours in one request, so a week costs one call. Regional rows carry only `forecast`,
+  the half hours in one request, so a week costs one call. It returns **337**, not 336: the reply
+  includes the period *ending* at the requested start, so a week asked for from local midnight
+  arrives with the previous day's 23:30–00:00 half hour attached. The reply is trimmed back to
+  the window it asked for, or that bar sits outside the range the window's own label claims. Regional rows carry only `forecast`,
   never `actual`, even for the past — do not treat a past week as measured.
 - **National Grid stamps times without seconds** (`2026-09-22T17:30Z`), which
   `ISO8601DateFormatter` rejects under `.withInternetDateTime` — every row parses to nil and the
@@ -360,6 +363,21 @@ against real data. Treat those paths as unverified.
   physically make. These are left alone: catching them needs a spike heuristic with a threshold
   nobody can justify from physics, and suppressing real variation is worse than showing a rough
   forecast. Say it is the operator's data rather than inventing a smoother.
+- **The national demand forecast is published per settlement day, not rolling.** Each NDF
+  publication covers 04:00Z to 03:30Z, so the *latest* one is always tomorrow's block and the
+  publication covering the rest of today has already been superseded. Asking only
+  `/forecast/demand/day-ahead` therefore leaves a hole from now until 04:00Z tomorrow — on a
+  morning window that was 46 of 97 half hours, most of the chart. The publication covering today
+  has to be asked for by name via `/forecast/demand/day-ahead/history?publishTime=`, using the
+  most recent 04:00Z at or before **now** — not before the window start. The stretch the settled
+  outturn cannot cover is always today, wherever the window begins; keying it to the window start
+  asked a past week for its own long-gone block and left today unforecast all over again, which
+  is exactly how it looked on a week view. With that third call a forecast window went from 48 to
+  88 of 96 slots covered (the rest are genuinely past the horizon) and a current-week window from
+  304 to all 336. The forecast calls are skipped altogether when the window ends in the past,
+  since it is fully settled. The three calls are ordered by
+  precedence — settled outturn, newest forecast, then the superseded one — and the first value
+  found for a slot wins, so a stale forecast never overwrites a settled figure.
 - **The half hour in progress has no demand, and that is structural.** Elexon publishes a
   period's settled INDO *when the period ends* (19:30Z was published at 20:00Z), and the
   day-ahead forecast drops a period once it has started — so for up to thirty minutes the current
@@ -409,6 +427,13 @@ against real data. Treat those paths as unverified.
   daily for two months would train you to ignore it. The record is pruned only when a fetch
   actually returned agreements, since an empty list after a failure would wipe it and re-alert
   everything.
+- **The rate-change alert fires in both directions** and is keyed to the *boundary* it is about,
+  not to when it last fired. A plain cooldown got this wrong twice over: it re-alerted for the
+  same switch when Octopus nudged a dispatch by a minute, and on a dispatch shorter than the
+  cooldown it silenced the end because the start had just been announced. `nextRateChange` is the
+  rule, and `--selftest` walks it through a window, a dispatch and the gaps between them.
+  Smart-charge dispatches are merged into the cheap windows, so a dispatch triggers it too, and a
+  merged run of back-to-back slots yields one change rather than one per slot.
 - **Dispatch alerts match slots within a five-minute tolerance** rather than comparing lists.
   Octopus re-plans by a minute or two on almost every fetch, so an exact comparison alerts several
   times an hour. Only future dispatches count; completed ones are history and churn. A ten-minute

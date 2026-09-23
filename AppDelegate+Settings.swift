@@ -61,7 +61,7 @@ extension AppDelegate {
         }
 
         let check = NSButton(
-            checkboxWithTitle: "Alert 10 minutes before the cheap rate starts", target: self,
+            checkboxWithTitle: "Alert 10 minutes before the rate changes", target: self,
             action: #selector(toggleNotify(_:)))
         let dispatchCheck = NSButton(
             checkboxWithTitle: "Alert when the smart-charge plan changes", target: self,

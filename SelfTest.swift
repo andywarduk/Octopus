@@ -483,6 +483,29 @@ func selfTest() {
             + (LoginItem.advice(for: status) ?? "(nothing to say)"))
     }
 
+    // The alert fires in both directions now, so the rule has to name the right one. A merged
+    // window must not produce a change in its middle, where nothing actually changes.
+    print("  next rate change:")
+    let window = [
+        Interval(start: date("2026-09-19T22:30:00Z"), end: date("2026-09-20T04:30:00Z"), smart: false),
+        Interval(start: date("2026-09-20T12:00:00Z"), end: date("2026-09-20T13:30:00Z"), smart: true),
+    ]
+    for (label, at) in [
+        ("standard, hours before", "2026-09-19T18:00:00Z"),
+        ("standard, ten minutes before", "2026-09-19T22:20:00Z"),
+        ("inside the cheap window", "2026-09-20T01:00:00Z"),
+        ("cheap, ten minutes before it ends", "2026-09-20T04:20:00Z"),
+        ("between the window and the dispatch", "2026-09-20T09:00:00Z"),
+        ("inside the smart-charge dispatch", "2026-09-20T12:30:00Z"),
+        ("after everything", "2026-09-20T20:00:00Z"),
+    ] {
+        let change = nextRateChange(window, now: date(at))
+        let text = change.map {
+            "\(formatted($0.at, "EEE HH:mm", tzLondon)) -> \($0.toCheap ? "cheap" : "standard")"
+        } ?? "no change ahead"
+        print("    \(label.padding(toLength: 36, withPad: " ", startingAt: 0)): \(text)")
+    }
+
     var flat = snap
     flat.cheapRate = flat.peakRate
     for (label, now, s) in [

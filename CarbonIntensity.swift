@@ -345,17 +345,24 @@ private func fetchNationalGridCarbon(
     formatter.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
 
     let tail: String
+    // The window actually asked for, kept so the reply can be trimmed back to it.
+    let windowStart: Date
+    let windowEnd: Date
     switch period {
     case .forecast:
         // Start on the half hour so the returned periods line up with the grid's own slots.
         let now = Date()
         let slot = Date(
             timeIntervalSince1970: (now.timeIntervalSince1970 / 1800).rounded(.down) * 1800)
+        windowStart = slot
+        windowEnd = slot.addingTimeInterval(48 * 3600)
         tail = "\(formatter.string(from: slot))/fw48h"
     case .week(let back):
         // The same window the usage charts use, so a week means the same thing in both.
-        // A seven-day range returns all 337 half hours in one request — it is not capped.
+        // A seven-day range returns all 336 half hours in one request — it is not capped.
         let window = usageDateWindow(weeksBack: back, days: 7, tz: tz)
+        windowStart = window.from
+        windowEnd = window.to
         tail = "\(formatter.string(from: window.from))/\(formatter.string(from: window.to))"
     }
 
@@ -375,7 +382,11 @@ private func fetchNationalGridCarbon(
         region = (body["data"] as? [[String: Any]])?.first
     }
     guard let region else { throw ApiError(message: "No carbon intensity for \(outward)") }
+    // National Grid includes the period *ending* at the requested start, so a week asked for from
+    // local midnight came back with the 23:30–00:00 half hour of the day before — a bar outside
+    // the range the window's own label claims, and 337 half hours where a week has 336.
     var readings = parseNationalGridCarbon(region["data"] as? [[String: Any]] ?? [])
+        .filter { $0.start >= windowStart && $0.start < windowEnd }
     guard !readings.isEmpty else {
         throw ApiError(message: "National Grid returned no carbon intensity for \(outward)")
     }
@@ -428,23 +439,47 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     day.timeZone = TimeZone(identifier: "UTC")
     day.dateFormat = "yyyy-MM-dd"
 
+    // The national demand forecast is published per settlement day, covering 04:00Z to 03:30Z.
+    // The *latest* publication is therefore always tomorrow's block, and the one covering the
+    // rest of today has already been superseded — asking only for the latest leaves a hole from
+    // now until 04:00Z tomorrow. The publication that covers today has to be asked for by name,
+    // through /history.
+    //
+    // Keyed to **now**, not to the window start: the stretch the settled outturn cannot cover is
+    // always today, wherever the window happens to begin. Keying it to the window start asked a
+    // past week for its own long-gone block and left today unforecast all over again.
+    let now = Date()
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC") ?? .current
+    let fourAM = utc.date(bySettingHour: 4, minute: 0, second: 0, of: now) ?? now
+    let todaysBlock = fourAM <= now ? fourAM : (utc.date(byAdding: .day, value: -1, to: fourAM) ?? fourAM)
+
     var demand: [Int: Double] = [:]
-    // Demand is a garnish on the mix view: a failure here leaves the bars unscaled rather than
-    // failing the whole window, so neither call throws.
-    let endpoints = [
-        "https://data.elexon.co.uk/bmrs/api/v1/demand/outturn"
+    // Order is precedence: settled outturn first, then the newest forecast, then the older
+    // publication that still covers today. The first value found for a slot wins.
+    var endpoints = [
+        ("https://data.elexon.co.uk/bmrs/api/v1/demand/outturn"
             + "?settlementDateFrom=\(day.string(from: from))&settlementDateTo=\(day.string(from: to))&format=json",
-        "https://data.elexon.co.uk/bmrs/api/v1/forecast/demand/day-ahead"
-            + "?from=\(iso.string(from: from))&to=\(iso.string(from: to))&format=json",
+         "initialDemandOutturn")
     ]
-    for endpoint in endpoints {
+    // A window that ends in the past is fully settled, so neither forecast has anything to add.
+    if to > now {
+        endpoints += [
+            ("https://data.elexon.co.uk/bmrs/api/v1/forecast/demand/day-ahead"
+                + "?from=\(iso.string(from: from))&to=\(iso.string(from: to))&format=json",
+             "nationalDemand"),
+            ("https://data.elexon.co.uk/bmrs/api/v1/forecast/demand/day-ahead/history"
+                + "?publishTime=\(iso.string(from: todaysBlock))&format=json",
+             "nationalDemand"),
+        ]
+    }
+    // Demand is a garnish on the mix view: a failure here leaves the bars unscaled rather than
+    // failing the whole window, so none of these throw.
+    for (endpoint, field) in endpoints {
         guard let url = URL(string: endpoint), let body = try? await getJSONPublic(url) else { continue }
         for row in body["data"] as? [[String: Any]] ?? [] {
             guard let start = parseCarbonDate(row["startTime"]) else { continue }
-            // The outturn names it one way and the forecast another; whichever is present wins,
-            // and the outturn is loaded first so a settled value isn't overwritten by a forecast.
-            guard let value = toDouble(row["initialDemandOutturn"]) ?? toDouble(row["nationalDemand"])
-            else { continue }
+            guard let value = toDouble(row[field]) else { continue }
             let key = slotKey(start)
             if demand[key] == nil { demand[key] = value }
         }

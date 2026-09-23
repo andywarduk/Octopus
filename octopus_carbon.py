@@ -144,6 +144,11 @@ def fetch_regional(outward, start, end, forecast):
                 "national_mix": False,
             }
         )
+    # National Grid includes the period *ending* at the requested start, which puts a half hour
+    # from the day before into a window asked for from midnight.
+    rows = [r for r in rows if start <= r["start"] < end] if not forecast else [
+        r for r in rows if r["start"] >= start
+    ]
     return region.get("shortname"), sorted(rows, key=lambda r: r["start"])
 
 
@@ -183,21 +188,46 @@ def fetch_national_mix(start, end):
 
 
 def fetch_demand(start, end):
-    """GB demand in MW. Settled outturn and the day-ahead forecast are both asked for, because a
-    window can straddle now and neither covers the other's half. The half hour in progress is
-    covered by neither — its outturn publishes when it ends — so it comes back missing."""
-    demand = {}
-    for url, field in [
+    """GB demand in MW, from the settled outturn and the day-ahead forecast.
+
+    The forecast is published per settlement day, covering 04:00Z to 03:30Z, so the *latest*
+    publication is always tomorrow's block and the one covering the rest of today has been
+    superseded. Asking only for the latest leaves a hole from now until 04:00Z tomorrow, which on
+    an evening window is most of the chart, so the publication covering today is asked for by name
+    through /history. The half hour in progress is still covered by neither: its outturn publishes
+    when it ends.
+    """
+    # Keyed to now, not to the window start: the stretch the settled outturn cannot cover is
+    # always today, wherever the window begins.
+    now = dt.datetime.now(dt.timezone.utc)
+    block = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    if block > now:
+        block -= dt.timedelta(days=1)
+
+    sources = [
         (
             f"{ELEXON}/demand/outturn?settlementDateFrom={start:%Y-%m-%d}"
             f"&settlementDateTo={end:%Y-%m-%d}&format=json",
             "initialDemandOutturn",
-        ),
-        (
-            f"{ELEXON}/forecast/demand/day-ahead?from={stamp(start)}&to={stamp(end)}&format=json",
-            "nationalDemand",
-        ),
-    ]:
+        )
+    ]
+    # A window that ends in the past is fully settled, so neither forecast has anything to add.
+    if end > now:
+        sources += [
+            (
+                f"{ELEXON}/forecast/demand/day-ahead?from={stamp(start)}&to={stamp(end)}&format=json",
+                "nationalDemand",
+            ),
+            (
+                f"{ELEXON}/forecast/demand/day-ahead/history?publishTime={stamp(block)}&format=json",
+                "nationalDemand",
+            ),
+        ]
+
+    demand = {}
+    # Order is precedence: settled outturn, then the newest forecast, then the older publication
+    # that still covers today. The first value found for a slot wins.
+    for url, field in sources:
         for row in (get(url) or {}).get("data") or []:
             value = row.get(field)
             if value is None:

@@ -1,21 +1,29 @@
-// "Cheap rate soon" alerts, and the test alert in Settings.
+// Rate-change, smart-charge and tariff-end alerts, plus the test alert in Settings.
 
 import Cocoa
 import UserNotifications
 
 extension AppDelegate {
-    /// Alerts once when a cheap window (fixed or smart-charge) is about to start.
-    func checkUpcomingCheap(intervals: [Interval]) {
-        guard notifyEnabled, let s = snapshot else { return }
+    /// Alerts once before the rate changes, in either direction — cheap starting or cheap ending.
+    func checkRateChange(intervals: [Interval]) {
+        guard notifyEnabled, let s = snapshot, s.hasCheapRate else { return }
         let now = Date()
-        guard currentInterval(intervals, now: now) == nil, let next = intervals.first else { return }
-        let lead = next.start.timeIntervalSince(now)
+        guard let change = nextRateChange(intervals, now: now) else { return }
+        let lead = change.at.timeIntervalSince(now)
         guard lead > 0, lead <= Self.leadTime else { return }
-        if let last = lastAlertAt, now.timeIntervalSince(last) < Self.alertCooldown { return }
-        lastAlertAt = now
+        // Keyed to the boundary rather than to when the last alert was sent. Octopus nudges
+        // dispatch times by a minute or two, so a plain cooldown either re-alerted for the same
+        // switch or, on a short dispatch, silenced the end of one because the start was recent.
+        if let last = lastAlertedChange,
+            abs(change.at.timeIntervalSince(last)) <= Self.changeTolerance
+        { return }
+        lastAlertedChange = change.at
+
         let mins = max(1, Int((lead / 60).rounded()))
-        let body = "From \(formatted(next.start, "HH:mm", s.tz)): \(pence(s.cheapRate)) (now \(pence(s.peakRate)))"
-        Task { await post(title: "Cheap rate in \(mins) min", body: body) }
+        let (from, to) = change.toCheap ? (s.peakRate, s.cheapRate) : (s.cheapRate, s.peakRate)
+        let title = change.toCheap ? "Cheap rate in \(mins) min" : "Standard rate in \(mins) min"
+        let body = "From \(formatted(change.at, "HH:mm", s.tz)): \(pence(to)) (now \(pence(from)))"
+        Task { await post(title: title, body: body) }
     }
 
     /// Alerts when the smart-charge plan gains or loses a slot.
@@ -99,7 +107,7 @@ extension AppDelegate {
 
     @objc func testAlert() {
         Task {
-            guard let problem = await post(title: "Cheap rate in 10 min", body: "This is a test alert.") else { return }
+            guard let problem = await post(title: "Rate changes in 10 min", body: "This is a test alert.") else { return }
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.icon = makeAppIcon()

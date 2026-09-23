@@ -35,10 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
     var apiKey: String?
-    /// When the last "cheap rate soon" alert went out, for the cooldown below.
-    var lastAlertAt: Date?
-    /// Dispatches get re-planned a few minutes either way, which would otherwise alert again.
-    static let alertCooldown: TimeInterval = 30 * 60
+    /// The boundary the last rate-change alert was about — not when it was sent. See
+    /// checkRateChange for why that distinction matters.
+    var lastAlertedChange: Date?
+    /// How far a boundary may move and still count as the same switch.
+    static let changeTolerance: TimeInterval = 5 * 60
     /// When the last "plan changed" alert went out. A plan that flaps between two shapes would
     /// otherwise alert on every flip.
     var lastDispatchAlertAt: Date?
@@ -98,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let recent = snapshot.map { cheapIntervals($0, now: now.addingTimeInterval(-switchWindow)) } ?? []
         let current = recent.filter { $0.end > now }
         updateIcon(intervals: current)
-        checkUpcomingCheap(intervals: current)
+        checkRateChange(intervals: current)
         // A small tolerance stops a tick landing just short of the interval from waiting a whole extra tick.
         if now.timeIntervalSince(snapshot?.fetched ?? .distantPast) >= fetchInterval(recent, now: now) - 5 { refresh() }
     }

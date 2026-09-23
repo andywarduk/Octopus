@@ -42,6 +42,24 @@ func cheapIntervals(_ s: Snapshot, now: Date) -> [Interval] {
     return merged
 }
 
+/// The next switch between rates, whichever way it goes.
+struct RateChange: Equatable {
+    var at: Date
+    /// True when the cheap rate is starting, false when it is ending.
+    var toCheap: Bool
+}
+
+/// When the rate next changes. Inside a cheap window that is its end; outside one it is the start
+/// of the next. `intervals` are the merged cheap windows, so back-to-back slots are one window and
+/// do not produce a change where nothing actually changes.
+func nextRateChange(_ intervals: [Interval], now: Date) -> RateChange? {
+    if let active = currentInterval(intervals, now: now) {
+        return RateChange(at: active.end, toCheap: false)
+    }
+    guard let next = intervals.first(where: { $0.start > now }) else { return nil }
+    return RateChange(at: next.start, toCheap: true)
+}
+
 func currentInterval(_ intervals: [Interval], now: Date) -> Interval? {
     intervals.first { $0.start <= now && now < $0.end }
 }

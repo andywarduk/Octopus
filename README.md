@@ -45,8 +45,8 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
 - **Menu:** the current rate and when it next changes, each car's charge level, charging status and
   today's charging goal, your account balance, any fixed tariff about to end, and the cheap windows
   in the next 48 hours including smart-charge dispatches.
-- **Alerts:** a notification 10 minutes before a cheap window starts, another when the
-  smart-charge plan changes — a slot added, dropped, moved by more than five minutes, or cancelled
+- **Alerts:** a notification 10 minutes before the rate changes — either way, cheap starting or
+  cheap ending — another when the smart-charge plan changes — a slot added, dropped, moved by more than five minutes, or cancelled
   altogether — and one as a fixed tariff nears its end, at 30 days, 14, 7 and the day before.
   Octopus nudges dispatches by a minute or two constantly, and those are ignored. All three can be
   turned off in Settings.
