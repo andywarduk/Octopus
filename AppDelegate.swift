@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var notifyCheck: NSButton?
     var dispatchCheck_: NSButton?
     var tariffCheck: NSButton?
+    var loginCheck: NSButton?
     var removeButton: NSButton?
     lazy var usageControllers: [Fuel: UsageWindowController] = Dictionary(
         uniqueKeysWithValues: Fuel.allCases.map {

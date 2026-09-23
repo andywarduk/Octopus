@@ -1,6 +1,7 @@
 // Self test (no network): OctopusMenuBar --selftest
 
 import Foundation
+import ServiceManagement
 
 func selfTest() {
     let tz = TimeZone(identifier: "Europe/London")!
@@ -470,6 +471,16 @@ func selfTest() {
         let ticks = stride(from: 0.0, through: top + step / 2, by: step)
             .map { String(format: "%g", $0) }
         print("    \(value) -> max \(String(format: "%g", top)) step \(String(format: "%g", step)): \(ticks.joined(separator: ", "))")
+    }
+
+    // What the Settings checkbox says when macOS does not simply agree. The status itself comes
+    // from the system, so only the wording is testable here.
+    print("  login item advice:")
+    for status in [
+        SMAppService.Status.enabled, .requiresApproval, .notFound, .notRegistered,
+    ] {
+        print("    \(LoginItem.describe(status).padding(toLength: 18, withPad: " ", startingAt: 0)): "
+            + (LoginItem.advice(for: status) ?? "(nothing to say)"))
     }
 
     var flat = snap

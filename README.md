@@ -53,6 +53,16 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
 - **Electricity Use… / Gas Use…:** a week of use as stacked columns.
 - **Carbon Intensity…:** how clean the grid is where you live, half hour by half hour.
 
+### Starting at login
+
+**Settings → Open at login** asks macOS to start the app when you log in. It registers the app
+bundle itself rather than installing a launch agent, so there is nothing left behind if you delete
+the app, and it appears under **System Settings → General → Login Items** where you can override
+it. macOS may ask you to approve it there the first time.
+
+Turn it on after installing rather than before: registered from `build/`, macOS has no installed
+bundle to launch and the checkbox reports that it cannot find one.
+
 ### The usage windows
 
 Each fuel gets its own window, with its own week position and meter. Both offer:

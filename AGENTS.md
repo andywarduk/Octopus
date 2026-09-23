@@ -52,7 +52,8 @@ There is no unit-test target. `--selftest` is the test suite; extend it rather t
 currently covers charging-status wording, band assignment and thresholds (including a single-rate
 tariff), both reading shapes, unpublished days, zero-usage days, week windows, cache freshness,
 axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge goal, balance
-wording, and the menu text at three moments.
+wording, carbon parsing and its plausibility screening, login-item wording, and the menu text at
+three moments.
 
 ### Verifying UI changes without a display
 
@@ -82,6 +83,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `CarbonChart.swift` | The carbon intensity chart, its sequential ramp, and its renderer |
 | `CarbonWindowController.swift` | The carbon intensity window |
 | `AppIcon.swift` | The app icon, drawn in code |
+| `LoginItem.swift` | Start-at-login, via SMAppService |
 | `AppDelegate.swift` | Status item, the 30-second tick, the refresh cycle |
 | `AppDelegate+Menu.swift` | Icon state and menu building |
 | `AppDelegate+Notifications.swift` | "Cheap rate soon" alerts |
@@ -418,6 +420,12 @@ against real data. Treat those paths as unverified.
   independently pairs a property with another address's meter on a multi-property account.
 - **VAT-inclusive prices everywhere**, because that is what the bill says. The menu bar states it
   once in its footer rather than suffixing every number.
+- **Start at login uses `SMAppService.mainApp`**, not a launch agent plist: it registers the
+  bundle, so deleting the app removes it and macOS lists it under Login Items where the user's
+  choice overrides the app's. The checkbox reads its state from `SMAppService` every time Settings
+  opens rather than from `UserDefaults`, because the user can turn it off in System Settings and a
+  stored preference would then lie. `.requiresApproval` counts as on — the user asked, macOS is
+  the one hesitating — and `.notFound` is what you get running from `build/`.
 - **Title case** for menu items, buttons and segmented controls, per Apple's HIG. Sentence case
   for descriptive labels and checkbox sentences.
 

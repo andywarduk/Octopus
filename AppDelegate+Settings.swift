@@ -11,6 +11,9 @@ extension AppDelegate {
         notifyCheck?.state = notifyEnabled ? .on : .off
         dispatchCheck_?.state = dispatchAlertEnabled ? .on : .off
         tariffCheck?.state = tariffAlertEnabled ? .on : .off
+        // Read from macOS rather than from a stored preference: the user can turn this off
+        // in System Settings, and the checkbox must reflect what is actually true.
+        loginCheck?.state = LoginItem.isEnabled ? .on : .off
         refreshMeterPicker()
         loadMeterChoices()
         NSApp.activate(ignoringOtherApps: true)
@@ -66,11 +69,15 @@ extension AppDelegate {
         let tariffEndCheck = NSButton(
             checkboxWithTitle: "Alert before a fixed tariff ends", target: self,
             action: #selector(toggleTariffNotify(_:)))
+        let loginItemCheck = NSButton(
+            checkboxWithTitle: "Open at login", target: self,
+            action: #selector(toggleLoginItem(_:)))
 
         let test = NSButton(title: "Send Test Alert", target: self, action: #selector(testAlert))
 
         let stack = NSStackView(
-            views: [heading, keyRow, status] + meterRows + [check, dispatchCheck, tariffEndCheck, test])
+            views: [heading, keyRow, status] + meterRows
+                + [check, dispatchCheck, tariffEndCheck, loginItemCheck, test])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -104,6 +111,7 @@ extension AppDelegate {
         notifyCheck = check
         dispatchCheck_ = dispatchCheck
         tariffCheck = tariffEndCheck
+        loginCheck = loginItemCheck
         removeButton = remove
     }
 
@@ -164,6 +172,23 @@ extension AppDelegate {
 
     @objc func toggleDispatchNotify(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "notifyDispatchChange")
+    }
+
+    @objc func toggleLoginItem(_ sender: NSButton) {
+        let wanted = sender.state == .on
+        do {
+            try LoginItem.setEnabled(wanted)
+        } catch {
+            // Put the checkbox back: it must not claim a state macOS refused to enter.
+            sender.state = LoginItem.isEnabled ? .on : .off
+            setKeyStatus("Couldn't change the login item: \(error.localizedDescription)", warning: true)
+            return
+        }
+        if wanted, let advice = LoginItem.advice(for: LoginItem.status) {
+            setKeyStatus(advice, warning: true)
+        } else {
+            setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
+        }
     }
 
     @objc func toggleTariffNotify(_ sender: NSButton) {
