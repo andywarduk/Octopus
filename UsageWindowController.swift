@@ -23,6 +23,9 @@ final class UsageWindowController: NSObject {
     private var weeksBack = 0
     private var granularity: Granularity = .day
     private var loading = false
+    /// Bumped when the meter or key changes, so a fetch already in flight for the old one is
+    /// neither shown nor cached when it lands.
+    private var generation = 0
 
     init(fuel: Fuel, apiKey: @escaping () -> String?) {
         self.fuel = fuel
@@ -40,6 +43,7 @@ final class UsageWindowController: NSObject {
 
     /// Called when the meter for this fuel changes: nothing already fetched still applies.
     func resetForMeterChange() {
+        generation += 1
         cache.removeAll()
         series = UsageSeries()
         weeksBack = 0
@@ -240,6 +244,8 @@ final class UsageWindowController: NSObject {
     }
 
     func load() {
+        // A request made while one is in flight is not dropped: the fetch checks on landing
+        // whether it is still what is wanted, and loads again if not.
         guard !loading else { return }
         guard let key = apiKey() else {
             setStatus("No API key set — add one in Settings.")
@@ -259,26 +265,35 @@ final class UsageWindowController: NSObject {
         loading = true
         setStatus("Loading…")
         let requested = weeksBack
+        let requestedGeneration = generation
         Task {
+            // The week, the meter or the key may all have changed while this was in flight.
+            var current: Bool { requestedGeneration == generation && key0 == cacheKey(weeksBack) }
             do {
                 let fetched = try await fetchUsage(apiKey: key, days: 7, weeksBack: requested, fuel: fuel)
-                cache[key0] = CachedUsage(
-                    series: fetched, fetchedAt: Date(), complete: fetched.isComplete)
-                trimCache()
-                // The week may have been changed again while this was in flight.
-                if requested == weeksBack {
+                // Another week's data is still worth keeping; another meter's or key's is not.
+                if requestedGeneration == generation {
+                    cache[key0] = CachedUsage(
+                        series: fetched, fetchedAt: Date(), complete: fetched.isComplete)
+                    trimCache()
+                }
+                if current {
                     series = fetched
                     apply()
                     setStatus("")
                 }
             } catch {
-                if requested == weeksBack {
+                await invalidateSession(after: error)
+                if current {
                     setStatus(error.localizedDescription)
                     series = UsageSeries()
                     clearChart(placeholder: "No usage to show")
                 }
             }
             loading = false
+            // What is wanted now was asked for while this was busy, and that request returned
+            // early. Without this the window sat on "Loading…" until the next click.
+            if !current, isVisible { load() }
         }
     }
 

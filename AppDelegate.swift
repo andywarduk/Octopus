@@ -40,10 +40,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var lastAlertedChange: Date?
     /// How far a boundary may move and still count as the same switch.
     static let changeTolerance: TimeInterval = 5 * 60
-    /// When the last "plan changed" alert went out. A plan that flaps between two shapes would
-    /// otherwise alert on every flip.
-    var lastDispatchAlertAt: Date?
-    static let dispatchCooldown: TimeInterval = 10 * 60
+    /// The cooldown on "plan changed" alerts, and the plan held while it runs.
+    var dispatchGate = DispatchAlertGate()
+    /// Bumped whenever what a fetch would show changes underneath it — a new key, another meter,
+    /// the key removed. A fetch that started before the bump is discarded when it lands.
+    var fetchGeneration = 0
+    /// A manual refresh asked for while one was already running. It runs as soon as that one ends,
+    /// rather than being dropped and leaving the old key's or old meter's data up for five minutes.
+    var refreshQueued = false
     var dispatchAlertEnabled: Bool {
         UserDefaults.standard.object(forKey: "notifyDispatchChange") as? Bool ?? true
     }
@@ -107,7 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// - Parameter manual: true for "Refresh Now" and after a key change, which resumes automatic
     ///   refreshing if it has stopped.
     func refresh(manual: Bool = false) {
-        guard !loading else { return }
+        guard !loading else {
+            if manual { refreshQueued = true }
+            return
+        }
         if manual {
             failures = 0
             autoRefreshPaused = false
@@ -120,32 +127,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             return
         }
         loading = true
+        let generation = fetchGeneration
         Task {
             do {
-                // Keep the old plan to compare against; nil on the first fetch, which must not alert.
-                let previous = snapshot
-                snapshot = try await fetchSnapshot(apiKey: key)
-                lastError = nil
-                failures = 0
-                if let current = snapshot {
+                let fetched = try await fetchSnapshot(apiKey: key)
+                // Started under another key or meter: its answer is to a question nobody is asking.
+                if generation == fetchGeneration {
+                    // The old plan to compare against, taken now rather than when the fetch began
+                    // so an invalidation in between leaves nothing to compare. Nil on the first
+                    // fetch, which must not alert.
+                    let previous = snapshot
+                    let current = carryForwardDevices(fetched, from: previous, now: Date())
+                    snapshot = current
+                    lastError = nil
+                    failures = 0
                     if let previous { checkDispatchChange(from: previous, to: current) }
                     // Unlike a dispatch change this needs no comparison, so it runs on the first
                     // fetch too — an expiry a fortnight away shouldn't wait for a second refresh.
                     checkTariffEnding(current)
                 }
             } catch {
-                failures += 1
-                if failures >= Self.maxFailures {
-                    autoRefreshPaused = true
-                    lastError = "\(error.localizedDescription) — stopped after \(Self.maxFailures) failed attempts. Choose Refresh Now to try again."
-                } else {
-                    lastError = error.localizedDescription
+                await invalidateSession(after: error)
+                if generation == fetchGeneration {
+                    failures += 1
+                    if failures >= Self.maxFailures {
+                        autoRefreshPaused = true
+                        lastError = "\(error.localizedDescription) — stopped after \(Self.maxFailures) failed attempts. Choose Refresh Now to try again."
+                    } else {
+                        lastError = error.localizedDescription
+                    }
                 }
             }
             loading = false
             updateIcon()
             // No rebuildMenu() here: menuNeedsUpdate rebuilds before the menu is next displayed.
+            if refreshQueued {
+                refreshQueued = false
+                refresh(manual: true)
+            }
         }
+    }
+
+    /// What is on screen no longer applies — the key or the meter changed. Drops it, and makes
+    /// sure a fetch already under way for the old one can't put it back.
+    func invalidateSnapshot() {
+        snapshot = nil
+        fetchGeneration += 1
+        dispatchGate.held = nil
     }
 
 

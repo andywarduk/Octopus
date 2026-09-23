@@ -28,15 +28,15 @@ extension AppDelegate {
 
     /// Alerts when the smart-charge plan gains or loses a slot.
     func checkDispatchChange(from previous: Snapshot, to current: Snapshot) {
-        guard dispatchAlertEnabled else { return }
+        // A plan that couldn't be fetched is not an empty plan; comparing against one would
+        // announce a cancellation, or a new plan, that never happened.
+        guard dispatchAlertEnabled, previous.devicesKnown, current.devicesKnown else { return }
         let now = Date()
-        if let last = lastDispatchAlertAt, now.timeIntervalSince(last) < Self.dispatchCooldown { return }
         guard
-            let change = dispatchChange(
-                from: futureDispatches(previous, now: now), to: futureDispatches(current, now: now),
-                tz: current.tz)
+            let change = dispatchGate.check(
+                previous: futureDispatches(previous, now: now), current: futureDispatches(current, now: now),
+                now: now, tz: current.tz)
         else { return }
-        lastDispatchAlertAt = now
         Task { await post(title: change.title, body: change.body) }
     }
 

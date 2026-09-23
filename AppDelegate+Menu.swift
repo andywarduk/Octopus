@@ -69,6 +69,12 @@ extension AppDelegate {
         // rebuilds before each display, so there's nothing to catch up on afterwards.
         guard !menuIsOpen else { return }
         menu.removeAllItems()
+        // First, where it can't be missed: at the foot of the information it sat below the tariff
+        // list, while the prices above it were quietly going stale.
+        if let e = lastError {
+            menu.addItem(infoItem("⚠︎ \(e)", font: .menuFont(ofSize: 0), color: .labelColor))
+            if snapshot != nil { menu.addItem(.separator()) }
+        }
         if let s = snapshot {
             for line in menuLines(s, now: Date()) {
                 switch line {
@@ -82,11 +88,9 @@ extension AppDelegate {
                     menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: detail ? .secondaryLabelColor : .labelColor))
                 }
             }
-        } else {
+        } else if loading || lastError == nil {
+            // "No data yet" under an error only repeats it; "Loading…" still says a retry is running.
             menu.addItem(infoItem(loading ? "Loading…" : "No data yet", font: .menuFont(ofSize: 0), color: .labelColor))
-        }
-        if let e = lastError {
-            menu.addItem(infoItem("⚠︎ \(e)", font: .menuFont(ofSize: 0), color: .labelColor))
         }
         menu.addItem(.separator())
         // A usage window is only offered for a fuel the account actually has. Until discovery

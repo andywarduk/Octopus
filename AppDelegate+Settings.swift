@@ -148,7 +148,7 @@ extension AppDelegate {
         // The menu bar rate follows the electricity meter, so only that one restarts it. Carbon
         // intensity is regional and follows the same choice's postcode.
         if fuel == .electricity {
-            snapshot = nil
+            invalidateSnapshot()
             carbonController.resetForMeterChange()
             refresh(manual: true)
         }
@@ -159,11 +159,9 @@ extension AppDelegate {
     func loadMeterChoices() {
         guard let key = apiKey, meterChoices.isEmpty else { return }
         Task {
-            guard
-                let auth = try? await gql(
-                    "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": key]),
-                let token = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String,
-                let found = try? await discoverMeters(token: token)
+            guard let found = try? await OctopusSession.shared.meters(apiKey: key),
+                // The key may have been changed or removed while this was in flight.
+                key == apiKey
             else { return }
             meterChoices = found
             refreshMeterPicker()
@@ -215,8 +213,14 @@ extension AppDelegate {
             return
         }
         apiKey = nil
-        snapshot = nil
+        invalidateSnapshot()
         lastError = "No API key set"
+        // Everything fetched belonged to that key: the account's meters, and each window's data.
+        meterChoices = []
+        refreshMeterPicker()
+        for controller in usageControllers.values { controller.resetForMeterChange() }
+        carbonController.resetForMeterChange()
+        Task { await OctopusSession.shared.invalidate() }
         removeButton?.isEnabled = false
         setKeyStatus("Key removed", warning: false)
         updateIcon()
@@ -244,10 +248,12 @@ extension AppDelegate {
                 "Couldn't save to your Keychain: \(Keychain.message(status)). The key works until you quit.",
                 warning: true)
         }
-        snapshot = nil
+        invalidateSnapshot()
         lastError = nil
         meterChoices = []
         for controller in usageControllers.values { controller.resetForMeterChange() }
+        // Another key may be another account, with another postcode.
+        carbonController.resetForMeterChange()
         refresh(manual: true)
         loadMeterChoices()
     }

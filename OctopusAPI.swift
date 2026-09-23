@@ -4,7 +4,17 @@ import Foundation
 
 struct ApiError: Error, LocalizedError {
     let message: String
+    /// Whether the failure casts doubt on the cached token and meters. An answer that is simply
+    /// empty — a week not yet published — says nothing about either, and dropping them would make
+    /// the next attempt log in and rediscover for no reason.
+    var invalidatesSession = true
     var errorDescription: String? { message }
+}
+
+/// Drops the cached token and meters unless the error is known not to concern them.
+func invalidateSession(after error: Error) async {
+    if (error as? ApiError)?.invalidatesSession == false { return }
+    await OctopusSession.shared.invalidate()
 }
 
 func toDouble(_ any: Any?) -> Double? {
@@ -13,13 +23,26 @@ func toDouble(_ any: Any?) -> Double? {
     return nil
 }
 
+/// Built once: a week of carbon readings parses over a thousand timestamps, and constructing a
+/// formatter per call dominated that. ISO8601DateFormatter is thread-safe once configured.
+private final class ISOParsers: @unchecked Sendable {
+    let fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    let whole: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+}
+
+private let isoParsers = ISOParsers()
+
 func parseDate(_ any: Any?) -> Date? {
     guard let s = any as? String else { return nil }
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let d = f.date(from: s) { return d }
-    f.formatOptions = [.withInternetDateTime]
-    return f.date(from: s)
+    return isoParsers.fractional.date(from: s) ?? isoParsers.whole.date(from: s)
 }
 
 func minutes(_ hhmmss: String) -> Int? {
@@ -33,28 +56,80 @@ func gql(_ query: String, _ variables: [String: Any] = [:], token: String? = nil
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     if let token { req.setValue(token, forHTTPHeaderField: "Authorization") }
     req.httpBody = try JSONSerialization.data(withJSONObject: ["query": query, "variables": variables])
-    let (data, _) = try await URLSession.shared.data(for: req)
-    guard let body = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        throw ApiError(message: "Unexpected response")
-    }
-    if let errors = body["errors"] as? [[String: Any]], let first = errors.first {
+    let (data, response) = try await URLSession.shared.data(for: req)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+    // A GraphQL error can arrive under a 4xx and says more than the status does, so it goes first.
+    // A rate limit or an outage usually has no JSON body at all, and parsing it would report a
+    // format error that hides the real cause.
+    let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    if let errors = body?["errors"] as? [[String: Any]], let first = errors.first {
         throw ApiError(message: first["message"] as? String ?? "GraphQL error")
     }
+    guard (200..<300).contains(status) else {
+        throw ApiError(message: status == 429 ? "Octopus is rate-limiting requests (HTTP 429)" : "Octopus returned HTTP \(status)")
+    }
+    guard let body else { throw ApiError(message: "Unexpected response") }
     return body["data"] as? [String: Any] ?? [:]
+}
+
+/// The Kraken token and the discovered meters, shared by every caller.
+///
+/// Each refresh used to log in afresh and rediscover every meter — three of its six requests,
+/// every five minutes, spent re-learning things that change about never. A token lasts an hour, so
+/// it is kept for 45 minutes; meters for an hour. Any failure drops both, so a revoked token or a
+/// changed account is picked up on the very next attempt rather than after the timeout.
+actor OctopusSession {
+    static let shared = OctopusSession()
+
+    private static let tokenLifetime: TimeInterval = 45 * 60
+    private static let meterLifetime: TimeInterval = 60 * 60
+
+    private var apiKey: String?
+    private var token: (value: String, at: Date)?
+    private var meters: (value: [MeterChoice], at: Date)?
+
+    func token(apiKey key: String) async throws -> String {
+        forgetIfKeyChanged(key)
+        if let token, Date().timeIntervalSince(token.at) < Self.tokenLifetime { return token.value }
+        let auth = try await gql(
+            "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": key])
+        guard let value = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String else {
+            throw ApiError(message: "Login failed")
+        }
+        // The key may have changed while this was awaiting; don't file a token under the wrong one.
+        if apiKey == key { token = (value, Date()) }
+        return value
+    }
+
+    func meters(apiKey key: String) async throws -> [MeterChoice] {
+        forgetIfKeyChanged(key)
+        if let meters, Date().timeIntervalSince(meters.at) < Self.meterLifetime { return meters.value }
+        let found = try await discoverMeters(token: token(apiKey: key))
+        if apiKey == key { meters = (found, Date()) }
+        return found
+    }
+
+    /// Called after any failed request: whatever went wrong, the next attempt starts clean.
+    func invalidate() {
+        token = nil
+        meters = nil
+    }
+
+    private func forgetIfKeyChanged(_ key: String) {
+        guard key != apiKey else { return }
+        apiKey = key
+        invalidate()
+    }
 }
 
 let fallbackWindows = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
 
-/// Fixed agreements on the account that haven't ended, soonest first.
-///
-/// Takes the raw `account` node so it can be exercised without the network. Agreements with no
-/// `validTo` are variable tariffs that never run out, and are not included. Two meters on the same
-/// tariff ending the same day collapse into one entry — that is one thing to be told about.
 /// Every active agreement on the account, one entry per meter point, never merged.
 ///
 /// Includes variable tariffs, which have no `validTo` — Intelligent Octopus Go is one, and it is
 /// the very tariff the menu bar's prices come from, so leaving it out made the menu silent about
-/// it. Two houses on the same tariff stay two entries: the list is what the account holds.
+/// it. Two houses on the same tariff stay two entries: the list is what the account holds. Takes
+/// the raw `account` node so it can be exercised without the network.
 func parseTariffEnds(_ account: [String: Any], now: Date) -> [TariffEnd] {
     var found: [TariffEnd] = []
     for property in (account["properties"] as? [[String: Any]]) ?? [] {
@@ -121,13 +196,8 @@ func todaysChargeGoal(_ preferences: [String: Any]?, now: Date, tz: TimeZone) ->
 }
 
 func fetchSnapshot(apiKey: String) async throws -> Snapshot {
-    let auth = try await gql(
-        "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": apiKey])
-    guard let token = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String else {
-        throw ApiError(message: "Login failed")
-    }
-
-    let choices = try await discoverMeters(token: token)
+    let token = try await OctopusSession.shared.token(apiKey: apiKey)
+    let choices = try await OctopusSession.shared.meters(apiKey: apiKey)
     guard let choice = MeterPreference.resolve(from: choices, fuel: .electricity) else {
         throw ApiError(message: "No electricity import meter found")
     }
@@ -166,7 +236,7 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
               agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
             }
             gasMeterPoints{
-              agreements{validFrom validTo tariff{... on TariffType{displayName}}}
+              agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
             }
           }
         }}
@@ -201,6 +271,7 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
     // be known before the rates request can ask for the charge plan in the same round trip.
     var cars: [Car] = []
     var deviceIds: [String] = []
+    var devicesKnown = true
     do {
         let dev = try await gql(
             """
@@ -239,7 +310,10 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
                     suspended: status?["isSuspended"] as? Bool))
         }
     } catch {
-        // Charge level is secondary; the rate display still works without it.
+        // Charge level is secondary; the rate display still works without it. But without the
+        // device ids there is no charge plan either, and an empty plan is not a cancelled one —
+        // so say the devices are unknown rather than letting the snapshot claim there are none.
+        devicesKnown = false
     }
 
     // `plannedDispatches` is deprecated — and gave only start and end. `flexPlannedDispatches`
@@ -320,7 +394,7 @@ func fetchSnapshot(apiKey: String) async throws -> Snapshot {
 
     return Snapshot(
         cheapRate: cheap, peakRate: peak, standingCharge: standingCharge, windows: windows,
-        dispatches: dispatches, cars: cars,
+        dispatches: dispatches, cars: cars, devicesKnown: devicesKnown,
         balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
         projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
         tariffEnds: parseTariffEnds(accountNode, now: now),

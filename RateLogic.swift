@@ -97,6 +97,20 @@ func plannedChargeLine(_ s: Snapshot, now: Date) -> String? {
     return "\(kind) \(when) · about \(String(format: "%.0f", total)) kWh planned"
 }
 
+/// A fetch whose device query failed keeps the cars and plan it last knew, rather than dropping
+/// them. Otherwise one transient failure blanks the charge windows out of the menu and the icon,
+/// and the next good fetch sees a plan appear from nowhere. Known-ness is inherited: with nothing
+/// earlier to carry, the result stays unknown and comparisons against it are skipped.
+func carryForwardDevices(_ fetched: Snapshot, from previous: Snapshot?, now: Date) -> Snapshot {
+    guard !fetched.devicesKnown, let previous else { return fetched }
+    var merged = fetched
+    merged.cars = previous.cars
+    // Only the plan still to come: the fetch already carries the completed slots.
+    merged.dispatches += futureDispatches(previous, now: now)
+    merged.devicesKnown = previous.devicesKnown
+    return merged
+}
+
 struct DispatchChange {
     var title: String
     var body: String
@@ -132,6 +146,39 @@ func dispatchChange(
     }
     let title = added.isEmpty ? "Smart charge slot dropped" : "Smart charge plan changed"
     return DispatchChange(title: title, body: plan)
+}
+
+/// Decides when a change in the charge plan is announced.
+///
+/// Octopus re-plans constantly, so a cooldown stops a plan that flaps between two shapes from
+/// alerting on every flip. But a cooldown that simply skips the check loses any real change made
+/// during it: the next fetch compares against the previous one, which already contains the change.
+/// So while the cooldown runs, the comparison point is held at the plan last announced, and the
+/// change is announced once the cooldown ends — unless the plan has flapped back by then.
+struct DispatchAlertGate {
+    var cooldown: TimeInterval = 10 * 60
+    var lastAlertAt: Date?
+    /// The plan to compare against while an alert is held back.
+    var held: [Interval]?
+
+    /// `previous` and `current` are the plans still to come, as `futureDispatches` gives them.
+    mutating func check(previous: [Interval], current: [Interval], now: Date, tz: TimeZone) -> DispatchChange? {
+        // Slots that have simply finished drop out of the held plan, or their natural end would
+        // read as a slot dropped.
+        let baseline = held.map { $0.filter { $0.end > now } } ?? previous
+        guard let change = dispatchChange(from: baseline, to: current, tz: tz) else {
+            // Back where the last announcement left it: a flap that settled. Nothing to hold.
+            held = nil
+            return nil
+        }
+        if let lastAlertAt, now.timeIntervalSince(lastAlertAt) < cooldown {
+            held = baseline
+            return nil
+        }
+        held = nil
+        lastAlertAt = now
+        return change
+    }
 }
 
 /// Domestic energy VAT. Only used to gross up the rare tariff that has no stated rates, since
@@ -213,11 +260,12 @@ func daysUntil(_ date: Date, now: Date, _ tz: TimeZone) -> Int {
     return cal.dateComponents([.day], from: cal.startOfDay(for: now), to: cal.startOfDay(for: date)).day ?? 0
 }
 
+/// Reads after a verb: "ends today", "ends tomorrow", "ends in 14 days".
 func dayCount(_ days: Int) -> String {
     switch days {
     case ...0: return "today"
     case 1: return "tomorrow"
-    default: return "\(days) days"
+    default: return "in \(days) days"
     }
 }
 
@@ -328,7 +376,9 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
     lines.append(.separator)
     lines.append(.header(s.cars.count == 1 ? "Car" : "Cars"))
     if let planned = plannedChargeLine(s, now: now) { lines.append(.text(planned)) }
-    if s.cars.isEmpty { lines.append(.text("No smart devices found")) }
+    if s.cars.isEmpty {
+        lines.append(.text(s.devicesKnown ? "No smart devices found" : "Couldn't load smart devices"))
+    }
     for car in s.cars {
         if let soc = car.soc {
             var title = "\(car.name): \(Int(soc.rounded()))%"
@@ -386,7 +436,7 @@ func tariffLines(_ s: Snapshot, now: Date) -> [Line] {
         }
         let last = lastCoveredDay(ending, s.tz)
         let days = daysUntil(last, now: now, s.tz)
-        let when = days <= 0 ? "last day today" : "in \(dayCount(days))"
+        let when = days <= 0 ? "last day today" : dayCount(days)
         lines.append(.text("    Ends \(formatted(last, "EEE d MMM", s.tz)) · \(when)"))
     }
     return lines

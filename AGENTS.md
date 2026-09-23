@@ -29,8 +29,11 @@ build/OctopusMenuBar.app/Contents/MacOS/OctopusMenuBar --chartdemo DIR   # chart
 build/OctopusMenuBar.app/Contents/MacOS/OctopusMenuBar --iconset DIR     # icon PNGs
 ```
 
-**Run `--selftest` after any change to the logic, and `--chartdemo` after any change to the
-chart, then look at the PNGs.** The chart has repeatedly been broken in ways only visible in the
+**Run `./selftest.sh` after any change to the logic, and `--chartdemo` after any change to the
+chart, then look at the PNGs.** `--selftest` only prints; `selftest.sh` diffs that output against
+the committed `SelfTest.expected` and fails on any difference. When a change is intended, read the
+diff, then accept it with `./selftest.sh --update` and commit the new expected output alongside the
+code. The output is fixed-date and timezone-independent, so a diff always means something changed. The chart has repeatedly been broken in ways only visible in the
 rendered output. The sample week is seeded, so the images are identical run to run and a diff is
 meaningful.
 
@@ -48,12 +51,14 @@ the wrong rows before when the inset changed. It also only counts blends, not pl
 an earlier version looked for background pixels and reported zero while the seams were plainly
 visible.
 
-There is no unit-test target. `--selftest` is the test suite; extend it rather than adding one. It
-currently covers charging-status wording, band assignment and thresholds (including a single-rate
+There is no unit-test target. `--selftest` is the test suite; extend it rather than adding one, and
+keep its output free of the clock — a stray `Date()` in anything printed makes `SelfTest.expected`
+go stale overnight. It currently covers charging-status wording, band assignment and thresholds (including a single-rate
 tariff), both reading shapes, unpublished days, zero-usage days, week windows, cache freshness,
 axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge goal, balance
-wording, carbon parsing and its plausibility screening, login-item wording, and the menu text at
-three moments.
+wording, carbon parsing and its plausibility screening, the mix basis wording and mean mix, the
+dispatch alert cooldown, a failed device query, page sizes and completeness across a clock change,
+tariff-end wording, login-item wording, and the menu text at three moments.
 
 ### Verifying UI changes without a display
 
@@ -75,7 +80,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
 | `Keychain.swift` | Reading, saving and removing the API key |
 | `MeterSelection.swift` | Fuels, discovering meters per property, saved choice per fuel |
-| `OctopusAPI.swift` | GraphQL transport and the calls that build a `Snapshot` |
+| `OctopusAPI.swift` | GraphQL transport, the shared token and meter cache, and the calls that build a `Snapshot` |
 | `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch |
 | `UsageChart.swift` | The stacked column chart, its palette, and the offscreen renderer |
 | `UsageWindowController.swift` | One usage window; one instance per fuel |
@@ -89,6 +94,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `AppDelegate+Notifications.swift` | "Cheap rate soon" alerts |
 | `AppDelegate+Settings.swift` | The Settings window and meter pickers |
 | `SelfTest.swift` | `--selftest` output |
+| `SelfTest.expected`, `selftest.sh` | The accepted `--selftest` output, and the script that diffs against it |
 | `main.swift` | Entry point and command-line flags |
 
 `octopus_rate.py`, `octopus_history.py` and `octopus_carbon.py` are standalone; standard library
@@ -235,6 +241,10 @@ These were all found the hard way; each one produced a plausible-looking wrong a
 - **`DAILY` and `INTERVALIZED` are rejected** as aggregation intervals. `THIRTY_MIN_INTERVAL`,
   `HOUR_INTERVAL`, `DAY_INTERVAL`, `WEEK_INTERVAL`, `MONTH_INTERVAL` and `POINT_IN_TIME` work.
   `POINT_IN_TIME` returns the cumulative meter register, not consumption.
+- **A local day is not always 48 half hours.** The measurements query pages by `first:`, and the
+  day the clocks go back has 50. Asking for 48 cut off the last hour, which then read as "not
+  published yet" forever and kept the week from ever counting as settled. `halfHours(from:to:)`
+  sizes each day's request; the spring day has 46.
 - **Readings lag by roughly two days.** The current week always has a blank tail. Distinguish
   "not published" from "used nothing": both look like zero, and only the first should be a gap.
 - **Zero usage is data.** A meter reporting all zeros still returns readings and standing charges.
@@ -260,9 +270,15 @@ Built in Swift 6 language mode, so the usual traps apply:
 
 ## Request budget
 
-Octopus rate-limits by query complexity and an hourly point allowance. A usage window costs one
-request per day fetched — seven per week — plus meter discovery. Two things keep that in check and
-should not be undone lightly:
+Octopus rate-limits by query complexity and an hourly point allowance. A menu-bar refresh costs
+three requests (agreements, devices, rates) every five minutes, every 30 seconds near a rate switch,
+and on opening the menu if the data is over a minute old. A usage window costs one request per day
+fetched — seven per week. These keep that in check and should not be undone lightly:
+
+- **The Kraken token and the discovered meters are shared** through `OctopusSession`. Every
+  refresh used to log in again and rediscover every meter, doubling its cost to six requests. The
+  token is kept 45 minutes (it lasts an hour) and the meters an hour; any failed request drops
+  both, so a revoked token or a changed account costs one failure rather than the full timeout.
 
 - Fetched weeks are cached in memory, keyed by meter and week offset. A settled week is kept
   indefinitely; one still waiting on Octopus is re-checked after 15 minutes. The current week is
@@ -350,7 +366,9 @@ against real data. Treat those paths as unverified.
   that silently clamps to the last published half hour — which is what produced the wrong
   conclusion. The regional forecast remains the fallback, `mixIsNational` records which was used,
   and the tooltip prints per-fuel gigawatts **only** for the national basis.
-  `CarbonSeries.mixBasis` is what tells the user, and it is covered by `--selftest`.
+  `CarbonSeries.mixBasis` is what tells the user, and it is covered by `--selftest`. It separates
+  national half hours already over ("GB actual") from those still ahead ("GB forecast"), judged
+  against `fetchedAt`: it used to call the whole 48-hour forecast view "GB actual".
 - **The carbon intensity forecast misfires at sunrise, and it is upstream.** On 23 September 2026
   the two half hours to 06:00Z carried solar at 78% and 84% of generation — 19.0 GW and 22.5 GW
   against demand of 24.3 and 26.6 GW — with an intensity of 5 and 8 gCO₂/kWh, before snapping
@@ -437,7 +455,9 @@ against real data. Treat those paths as unverified.
 - **Menu order is current rate, upcoming cheap rate, cars, account, tariffs**, then the action
   items: Electricity Use…, Gas Use…, Refresh Now, Settings…, Quit. The informational sections come
   from `menuLines`, which `--selftest` prints at three moments; the action items are built in
-  `rebuildMenu` and are not covered by any test, so check those in the running app.
+  `rebuildMenu` and are not covered by any test, so check those in the running app. An error,
+  when there is one, comes before everything, split off by a separator: at the foot of the
+  information it sat under the tariff list while the prices above it went stale.
   A single-rate tariff skips the upcoming-cheap section rather than showing it empty — that used
   to be an early return, which forced the section to be last, and is now an `if` so the order is
   free to change. The VAT and standing-charge footnote sits directly under the prices it
@@ -463,7 +483,20 @@ against real data. Treat those paths as unverified.
   Octopus re-plans by a minute or two on almost every fetch, so an exact comparison alerts several
   times an hour. Only future dispatches count; completed ones are history and churn. A ten-minute
   cooldown covers a plan that flaps between two shapes, and the first fetch after launch never
-  alerts because there is nothing to compare against.
+  alerts because there is nothing to compare against. The cooldown **holds** a change rather than
+  dropping it: `DispatchAlertGate` keeps the last announced plan as the comparison point and
+  announces once the cooldown ends, unless the plan has flapped back. Skipping the check instead
+  lost the change for good, since the next fetch compared against one that already contained it.
+- **A failed device query is "don't know", not "nothing planned".** It is swallowed so the rate
+  display survives, but it also costs the device ids and so the whole charge plan. The snapshot
+  says `devicesKnown: false`, `carryForwardDevices` keeps the last known cars and plan, and a plan
+  that was never known is never compared — otherwise one transient failure announced "Smart charge
+  cancelled" and blanked the charge windows out of the menu and the icon.
+- **A fetch checks, when it lands, that it is still wanted.** Changing the key or the meter bumps
+  a generation; a fetch started under an older one is discarded rather than shown. A manual
+  refresh asked for mid-fetch is queued, not dropped. The usage and carbon windows do the same,
+  and reload whatever was asked for while they were busy — before this, clicking back twice
+  quickly left a window on "Loading…" and a meter change mid-load showed the old meter's week.
 - **Automatic refreshing stops after 10 consecutive failures** until "Refresh Now". Without this a
   bad key retries every 30 seconds indefinitely.
 - **The account section lists every agreement, one per meter point, merged with nothing.** Two

@@ -28,6 +28,9 @@ final class CarbonWindowController: NSObject {
     private var period: CarbonPeriod = .forecast
     private var mode: CarbonMode = .intensity
     private var loading = false
+    /// Bumped when the meter or key changes: the postcode may differ, so a fetch in flight for the
+    /// old one is neither shown nor cached.
+    private var generation = 0
 
     /// The chart's timezone throughout: both sources are British and report in UTC.
     private let tz = TimeZone(identifier: "Europe/London") ?? .current
@@ -46,6 +49,7 @@ final class CarbonWindowController: NSObject {
 
     /// The meter choice drives which postcode is used, so a change invalidates everything.
     func resetForMeterChange() {
+        generation += 1
         cache.removeAll()
         series = CarbonSeries()
         clearChart(placeholder: "Loading…")
@@ -294,21 +298,26 @@ final class CarbonWindowController: NSObject {
         setStatus("Loading…")
         let requestedSource = source
         let requestedPeriod = period
+        let requestedGeneration = generation
         let key = apiKey()
         Task {
+            // Either control, or the meter behind the postcode, may have changed in flight.
+            var current: Bool {
+                requestedGeneration == generation && requestedSource == source && requestedPeriod == period
+            }
             do {
                 let fetched = try await fetchCarbon(
                     source: requestedSource, period: requestedPeriod, apiKey: key,
                     postcode: postcode, tz: tz)
-                cache[key0] = fetched
-                // Either control may have been changed again while this was in flight.
-                if requestedSource == source && requestedPeriod == period {
+                if requestedGeneration == generation { cache[key0] = fetched }
+                if current {
                     series = fetched
                     apply()
                     setStatus("")
                 }
             } catch {
-                if requestedSource == source && requestedPeriod == period {
+                if requestedSource == .octopus { await invalidateSession(after: error) }
+                if current {
                     setStatus(error.localizedDescription)
                     series = CarbonSeries()
                     clearChart(placeholder: "No carbon intensity to show")
@@ -316,6 +325,9 @@ final class CarbonWindowController: NSObject {
                 }
             }
             loading = false
+            // A step or source change made while this was busy returned early; load it now, or
+            // the window sits on "Loading…" until the next click.
+            if !current, window?.isVisible == true { load() }
         }
     }
 
@@ -332,11 +344,9 @@ final class CarbonWindowController: NSObject {
             // still summed although Britain burned its last in 2024 and the figure is now always
             // zero: the API still carries the fuel, and naming the total "fossil" rather than
             // listing the fuels means a restart would be counted without a wording change.
-            let fossil = series.readings.reduce(0.0) { total, reading in
-                total + reading.mix
-                    .filter { [.gas, .coal].contains($0.fuel) }
-                    .reduce(0) { $0 + $1.percent }
-            } / Double(max(1, series.readings.count))
+            // The same averages as the legend, so the implausible half hours are left out here too.
+            let mean = averageMix(series.readings)
+            let fossil = (mean[.gas] ?? 0) + (mean[.coal] ?? 0)
             parts.append(String(format: "fossil fuels %.0f%% on average", fossil))
             // Bar heights are GB-wide while the intensity view is regional, and the mix behind
             // them can be either. Both have to be said, or the chart implies one scope.

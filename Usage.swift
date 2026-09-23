@@ -226,16 +226,19 @@ func usageDateWindow(weeksBack: Int, days: Int, tz: TimeZone) -> (from: Date, to
     return (from, cal.date(byAdding: .day, value: 1, to: lastDay) ?? lastDay)
 }
 
+/// Half hours in a local day, which is the page size a day's request needs. Not always 48: the day
+/// the clocks go back has 50, and asking for 48 silently cut off its last hour — which then read
+/// as "not published yet" for good, and kept the week from ever counting as settled.
+func halfHours(from start: Date, to end: Date) -> Int {
+    max(1, Int((end.timeIntervalSince(start) / 1800).rounded()))
+}
+
 /// Pulls `days` local days, a day per request, ending `weeksBack` weeks before today.
 func fetchUsage(apiKey: String, days: Int, weeksBack: Int = 0, fuel: Fuel = .electricity) async throws
     -> UsageSeries
 {
-    let auth = try await gql(
-        "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": apiKey])
-    guard let token = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String else {
-        throw ApiError(message: "Login failed")
-    }
-    let choices = try await discoverMeters(token: token)
+    let token = try await OctopusSession.shared.token(apiKey: apiKey)
+    let choices = try await OctopusSession.shared.meters(apiKey: apiKey)
     guard let choice = MeterPreference.resolve(from: choices, fuel: fuel) else {
         throw ApiError(message: "No \(fuel.title.lowercased()) meter found on this account")
     }
@@ -289,7 +292,8 @@ func fetchUsage(apiKey: String, days: Int, weeksBack: Int = 0, fuel: Fuel = .ele
             let data = try await gql(
                 query,
                 [
-                    "p": propertyId, "sp": supplyPoint, "tz": tzName, "n": 48, "freq": frequency,
+                    "p": propertyId, "sp": supplyPoint, "tz": tzName, "n": halfHours(from: dayStart, to: dayEnd),
+                    "freq": frequency,
                     "s": iso.string(from: dayStart), "e": iso.string(from: dayEnd),
                 ], token: token)
             let edges = (((data["property"] as? [String: Any])?["measurements"] as? [String: Any])?["edges"]
@@ -345,7 +349,8 @@ func fetchUsage(apiKey: String, days: Int, weeksBack: Int = 0, fuel: Fuel = .ele
     guard result.readings > 0 else {
         throw ApiError(
             message: "No \(fuel.title.lowercased()) readings for \(choice.label). "
-                + "Octopus publishes about two days behind, and a meter with no readings stays empty.")
+                + "Octopus publishes about two days behind, and a meter with no readings stays empty.",
+            invalidatesSession: false)
     }
     // "kwh" from the API reads better as "kWh"; anything else (m3) is shown as given.
     let label = (result.unit?.lowercased() == "kwh" ? "kWh" : result.unit) ?? fuel.defaultEnergyLabel

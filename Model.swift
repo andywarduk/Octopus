@@ -35,8 +35,6 @@ struct Car {
     var suspended: Bool?
 }
 
-/// A fixed-term agreement that runs out. Only agreements with an end date become one of these:
-/// a variable tariff has `validTo: null` and never expires.
 /// One active agreement, exactly as the account holds it — one per meter point, never merged.
 /// Two houses on the same tariff are two agreements, and the menu says so.
 struct TariffEnd: Equatable {
@@ -63,6 +61,10 @@ struct Snapshot {
     var windows: [(from: Int, to: Int)]  // minutes after local midnight
     var dispatches: [Interval]
     var cars: [Car]
+    /// False when the device query failed. Then `cars` is empty and `dispatches` holds only
+    /// completed slots — which is "don't know", not "no car and nothing planned", and must not be
+    /// compared against a plan that was known.
+    var devicesKnown = true
     /// Account balance and the balance Octopus expects in a year, both in pence. Positive is
     /// credit. Nil when the account didn't report them.
     var balancePence: Int?

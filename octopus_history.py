@@ -105,11 +105,17 @@ def bucket_name(label):
 
 def fetch_day(prop_id, mpan, start, tz_name, token, debug=False):
     """Half-hourly measurements for the local day beginning at `start`."""
+    end = start + timedelta(days=1)
+    # Not always 48: the day the clocks go back has 50 half hours, and asking for 48 cut off
+    # its last hour. Converted to UTC first: two datetimes sharing a tzinfo subtract by wall
+    # clock, which would say 24 hours on that day too.
+    elapsed = end.astimezone(timezone.utc) - start.astimezone(timezone.utc)
+    half_hours = max(1, round(elapsed.total_seconds() / 1800))
     data = gql(
         MEASUREMENTS_QUERY,
         {
-            "p": prop_id, "mpan": mpan, "tz": tz_name, "n": 48,
-            "s": start.isoformat(), "e": (start + timedelta(days=1)).isoformat(),
+            "p": prop_id, "mpan": mpan, "tz": tz_name, "n": half_hours,
+            "s": start.isoformat(), "e": end.isoformat(),
         },
         token,
     )

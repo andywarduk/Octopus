@@ -159,7 +159,6 @@ func selfTest() {
         print(String(format: "    %@: %.4fp ex VAT -> %.4fp incl", label, exVat, exVat * vatMultiplier))
     }
 
-    // A part-published day must not make the week look settled, or the rest never arrives.
     // Octopus re-plans slots by a few minutes constantly; only a real change should alert.
     print("  dispatch changes:")
     func slot(_ from: String, _ to: String) -> Interval {
@@ -179,6 +178,53 @@ func selfTest() {
         print("    \(label.padding(toLength: 16, withPad: " ", startingAt: 0)): "
             + (change.map { "\($0.title) — \($0.body)" } ?? "no alert"))
     }
+
+    // A change made during the cooldown must still be announced once it ends, and a plan that
+    // flaps and settles back must not be.
+    print("  dispatch alert cooldown:")
+    let otherSlot = slot("2026-09-20T13:00:00Z", "2026-09-20T14:00:00Z")
+    let lateSlot = slot("2026-09-20T15:00:00Z", "2026-09-20T16:00:00Z")
+    let gateStart = date("2026-09-19T20:00:00Z")
+    for (label, steps) in [
+        ("change inside the cooldown", [
+            (0.0, planned, planned + [otherSlot]),
+            (5, planned + [otherSlot], planned + [otherSlot, lateSlot]),
+            (11, planned + [otherSlot, lateSlot], planned + [otherSlot, lateSlot]),
+        ]),
+        ("flap that settles back", [
+            (0.0, planned, planned + [otherSlot]),
+            (3, planned + [otherSlot], planned),
+            (6, planned, planned + [otherSlot]),
+            (12, planned + [otherSlot], planned + [otherSlot]),
+        ]),
+    ] as [(String, [(Double, [Interval], [Interval])])] {
+        var gate = DispatchAlertGate()
+        let outcomes = steps.map { minutes, previous, current in
+            let result = gate.check(
+                previous: previous, current: current, now: gateStart.addingTimeInterval(minutes * 60),
+                tz: tzLondon)
+            return "\(Int(minutes))m " + (result?.title ?? (gate.held == nil ? "quiet" : "held"))
+        }
+        print("    \(label.padding(toLength: 28, withPad: " ", startingAt: 0)): "
+            + outcomes.joined(separator: " → "))
+    }
+
+    // A failed device query is "don't know", not "no car and nothing planned".
+    print("  device query failure:")
+    var failedDevices = snap
+    failedDevices.cars = []
+    failedDevices.dispatches = []
+    failedDevices.devicesKnown = false
+    let beforeFailure = date("2026-09-20T10:00:00Z")
+    let carried = carryForwardDevices(failedDevices, from: snap, now: beforeFailure)
+    print("    after a good fetch: cars \(carried.cars.count), planned \(futureDispatches(carried, now: beforeFailure).count), "
+        + "known \(carried.devicesKnown), cheap at 12:30Z \(isCheap(carried, now: date("2026-09-20T12:30:00Z")))")
+    let uncarried = carryForwardDevices(failedDevices, from: nil, now: beforeFailure)
+    let deviceLines = menuLines(uncarried, now: beforeFailure).compactMap { line -> String? in
+        if case .text(let text) = line, text.contains("smart devices") { return text }
+        return nil
+    }
+    print("    first fetch: known \(uncarried.devicesKnown), menu says \"\(deviceLines.joined())\"")
 
     print("  tariff end dates:")
     // Shapes that must not become an expiry: no end date at all (a variable tariff), one that has
@@ -381,7 +427,8 @@ func selfTest() {
     // behind them can be either basis in one window. The footer has to say which, so that
     // wording is worth pinning down.
     print("    mix basis wording:")
-    func basis(national: Int, regional: Int, demand: Int) -> CarbonSeries {
+    // Readings start at 00:00Z; a fetch at `fetchedAt` has seen the ones ending by then happen.
+    func basis(national: Int, regional: Int, demand: Int, fetchedAt: String = "2026-09-22T06:00:00Z") -> CarbonSeries {
         var readings: [CarbonReading] = []
         for position in 0..<(national + regional) {
             let from = date("2026-09-22T00:00:00Z").addingTimeInterval(Double(position) * 1800)
@@ -394,10 +441,13 @@ func selfTest() {
         }
         return CarbonSeries(
             source: .nationalGrid, region: "South England", outward: "SN13", readings: readings,
-            fetchedAt: Date())
+            fetchedAt: date(fetchedAt))
     }
     for (label, series) in [
-        ("all national, all demand", basis(national: 4, regional: 0, demand: 4)),
+        ("all national, all past", basis(national: 4, regional: 0, demand: 4)),
+        // The forecast view: every half hour still to come. This was labelled "GB actual".
+        ("all national, all ahead", basis(national: 4, regional: 0, demand: 4, fetchedAt: "2026-09-22T00:00:00Z")),
+        ("national, past then ahead", basis(national: 4, regional: 0, demand: 4, fetchedAt: "2026-09-22T01:00:00Z")),
         ("all regional, no demand", basis(national: 0, regional: 4, demand: 0)),
         ("national then regional, part demand", basis(national: 2, regional: 2, demand: 3)),
     ] {
@@ -466,6 +516,19 @@ func selfTest() {
         + "\(glitched.cleanest.map { formatGrams($0.grams) } ?? "none"), "
         + "\(glitched.suspectCount) suspect")
 
+    print("    mean mix skips implausible half hours:")
+    let sunrise = [40.0, 40, 2, 40].enumerated().map { position, gas in
+        CarbonReading(
+            start: date("2026-09-23T04:30:00Z").addingTimeInterval(Double(position) * 1800),
+            end: date("2026-09-23T05:00:00Z").addingTimeInterval(Double(position) * 1800), grams: 150,
+            index: .moderate,
+            mix: [FuelShare(fuel: .gas, percent: gas), FuelShare(fuel: .solar, percent: 100 - gas)],
+            suspectMix: gas == 2)
+    }
+    let means = averageMix(sunrise)
+    print(String(format: "      gas %.1f%%, solar %.1f%% (with the glitch counted: gas %.1f%%)",
+        means[.gas] ?? 0, means[.solar] ?? 0, sunrise.reduce(0) { $0 + ($1.mix.first?.percent ?? 0) } / 4))
+
     print("    power formatting: "
         + [30_634.0, 21_800, 1_050, 0].map { formatPower($0) }.joined(separator: ", "))
 
@@ -482,6 +545,7 @@ func selfTest() {
     print("    back, back, back, forward, forward, forward: "
         + [step(1), step(1), step(1), step(-1), step(-1), step(-1)].joined(separator: " → "))
 
+    // A part-published day must not make the week look settled, or the rest never arrives.
     print("  completeness:")
     let dayStart = date("2026-09-18T23:00:00Z")   // 00:00 BST
     let dayEnd = dayStart.addingTimeInterval(86400)
@@ -490,6 +554,17 @@ func selfTest() {
             buckets: [], standing: (0..<halfHoursPublished).map { (dayStart.addingTimeInterval(Double($0) * 1800), 0.68) },
             tz: tzLondon, from: dayStart, to: dayEnd, supportsHalfHour: halfHourly, readings: max(1, halfHoursPublished))
     }
+    // The day the clocks go back has 50 half hours. Asking for 48 cut off its last hour, which
+    // then read as unpublished forever and kept the week from ever settling.
+    print("    page size per local day: " + [
+        ("spring forward", "2026-03-29T00:00:00Z", "2026-03-29T23:00:00Z"),
+        ("ordinary", "2026-09-18T23:00:00Z", "2026-09-19T23:00:00Z"),
+        ("fall back", "2026-10-24T23:00:00Z", "2026-10-26T00:00:00Z"),
+    ].map { "\($0.0) \(halfHours(from: date($0.1), to: date($0.2)))" }.joined(separator: ", "))
+    let longDay = UsageSeries(
+        buckets: [], standing: (0..<50).map { (date("2026-10-24T23:00:00Z").addingTimeInterval(Double($0) * 1800), 0.68) },
+        tz: tzLondon, from: date("2026-10-24T23:00:00Z"), to: date("2026-10-26T00:00:00Z"), readings: 50)
+    print("    half-hourly, all 50 published on the day the clocks go back: complete=\(longDay.isComplete)")
     for (label, s) in [
         ("half-hourly, 2 of 48 published", series(halfHoursPublished: 2, halfHourly: true)),
         ("half-hourly, all 48 published", series(halfHoursPublished: 48, halfHourly: true)),
@@ -523,8 +598,6 @@ func selfTest() {
             + (LoginItem.advice(for: status) ?? "(nothing to say)"))
     }
 
-    // The alert fires in both directions now, so the rule has to name the right one. A merged
-    // window must not produce a change in its middle, where nothing actually changes.
     print("  account and tariff sections (single-property account adds no addresses):")
     var oneHouse = snap
     oneHouse.propertyCount = 1
@@ -542,6 +615,23 @@ func selfTest() {
         case .text(let t): print("    \(t)")
         case .separator: break
         }
+    }
+
+    print("  tariff end wording:")
+    for days in [0, 1, 14] {
+        var ending = oneHouse
+        ending.tariffEnds = [
+            TariffEnd(
+                fuel: .gas, name: "Octopus 12M Fixed",
+                // Cover stops at midnight, so the last covered day is the one before `ends`.
+                ends: date("2026-09-19T23:00:00Z").addingTimeInterval(Double(days) * 86400),
+                property: "1 Test Lane"),
+        ]
+        let detail = tariffLines(ending, now: date("2026-09-19T15:13:00Z")).compactMap { line -> String? in
+            if case .text(let text) = line, text.hasPrefix("    ") { return text.trimmingCharacters(in: .whitespaces) }
+            return nil
+        }
+        print("    \(days) day\(days == 1 ? "" : "s"): menu \"\(detail.joined())\", alert \"Octopus 12M Fixed ends \(dayCount(days))\"")
     }
 
     print("  planned charge line:")
@@ -572,6 +662,8 @@ func selfTest() {
             + (plannedChargeLine(snapshot, now: atNoon) ?? "(no line)"))
     }
 
+    // The alert fires in both directions now, so the rule has to name the right one. A merged
+    // window must not produce a change in its middle, where nothing actually changes.
     print("  next rate change:")
     let window = [
         Interval(start: date("2026-09-19T22:30:00Z"), end: date("2026-09-20T04:30:00Z"), smart: false),

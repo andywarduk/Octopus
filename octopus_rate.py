@@ -211,7 +211,7 @@ account_node = run(
       properties{
         address
         electricityMeterPoints{agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}}
-        gasMeterPoints{agreements{validFrom validTo tariff{... on TariffType{displayName}}}}
+        gasMeterPoints{agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}}
       }
     }}""",
     {"a": account},

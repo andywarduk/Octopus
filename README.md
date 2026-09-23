@@ -8,7 +8,7 @@ There are also three command-line scripts covering the same ground, for the term
 
 > **This project was vibe-coded.** Every line was written by Claude (Anthropic's Claude Code) from
 > conversational prompts, then checked against a real Octopus account. It has no test suite beyond
-> the built-in `--selftest`, and much of it — the chart in particular — was verified by rendering
+> the built-in `--selftest` (checked against its committed output by `./selftest.sh`), and much of it — the chart in particular — was verified by rendering
 > it and looking, rather than by anything automated. Read it with that in mind before trusting it
 > with anything that matters. `AGENTS.md` records what the API actually does and why the code is
 > shaped the way it is.

@@ -194,15 +194,24 @@ struct CarbonSeries {
 
     var suspectCount: Int { readings.filter(\.suspectMix).count }
 
-    /// How to describe what the mix segments mean, given the two bases can both appear in one
-    /// window — the national outturn ends where the forecast begins.
+    /// How to describe what the mix segments mean. Up to three bases can appear in one window, in
+    /// time order: the national mix for half hours already over, the national forecast for the rest
+    /// (National Grid forecasts it for any range spanning now), and the regional forecast share
+    /// where the national one wasn't published. Calling a national forecast "actual" — which this
+    /// used to do for the whole 48-hour forecast view — claims a measurement that doesn't exist.
     var mixBasis: String {
         let withMix = readings.filter { !$0.mix.isEmpty }
         guard !withMix.isEmpty else { return "no mix" }
-        let national = withMix.filter(\.mixIsNational).count
-        if national == withMix.count { return "mix: GB actual" }
-        if national == 0 { return "mix: \(region ?? outward) forecast share" }
-        return "mix: GB actual, then \(region ?? outward) forecast share"
+        let labels = withMix.map { reading in
+            !reading.mixIsNational
+                ? "\(region ?? outward) forecast share"
+                : reading.end <= fetchedAt ? "GB actual" : "GB forecast"
+        }
+        // Each basis once, in the order the window meets it.
+        var runs: [String] = []
+        for label in labels where runs.last != label { runs.append(label) }
+        var seen = Set<String>()
+        return "mix: " + runs.filter { seen.insert($0).inserted }.joined(separator: ", then ")
     }
 
     /// Forecasts go stale as the window they cover slides forward. A past week is settled and
@@ -226,17 +235,41 @@ struct CarbonSeries {
     }
 }
 
+/// Mean share per fuel over a window, for the legend and the footer alike so they can never
+/// disagree. Implausible half hours are skipped, divisor included, or one bad sunrise drags the
+/// whole window's solar figure up with it — and the fossil figure down. Fuels that never appear
+/// are absent rather than zero.
+func averageMix(_ readings: [CarbonReading]) -> [GridFuel: Double] {
+    let usable = readings.filter { !$0.suspectMix }
+    guard !usable.isEmpty else { return [:] }
+    var totals: [GridFuel: Double] = [:]
+    for reading in usable {
+        for share in reading.mix { totals[share.fuel, default: 0] += share.percent }
+    }
+    return totals.mapValues { $0 / Double(usable.count) }
+}
+
+/// Minute-precision UTC stamps, as National Grid and Elexon write them. Built once; DateFormatter
+/// is safe to use from several threads.
+private final class MinuteStamp: @unchecked Sendable {
+    let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
+        return formatter
+    }()
+}
+
+private let minuteStamp = MinuteStamp()
+
 /// National Grid stamps periods to the minute — `2026-09-22T17:30Z`, with no seconds — which
 /// `ISO8601DateFormatter` rejects under `.withInternetDateTime`. Without this every row parses to
 /// nil and the series looks empty rather than broken.
 func parseCarbonDate(_ any: Any?) -> Date? {
-    if let date = parseDate(any) { return date }
     guard let text = any as? String else { return nil }
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(identifier: "UTC")
-    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
-    return formatter.date(from: text)
+    // The minute form first: it is what National Grid and Elexon send, row after row.
+    return minuteStamp.formatter.date(from: text) ?? parseDate(text)
 }
 
 /// The outward code — "SN13" from "SN13 9XX". Both APIs take the outward part, and it is all
@@ -286,11 +319,7 @@ func fetchCarbon(
 }
 
 private func fetchOctopusCarbon(apiKey: String, postcode: String, outward: String) async throws -> CarbonSeries {
-    let auth = try await gql(
-        "mutation($k:String!){obtainKrakenToken(input:{APIKey:$k}){token}}", ["k": apiKey])
-    guard let token = (auth["obtainKrakenToken"] as? [String: Any])?["token"] as? String else {
-        throw ApiError(message: "Login failed")
-    }
+    let token = try await OctopusSession.shared.token(apiKey: apiKey)
     let data = try await gql(
         """
         query($p:String!){getProjectedRegionalCarbonIntensity(postcode:$p){
@@ -301,7 +330,7 @@ private func fetchOctopusCarbon(apiKey: String, postcode: String, outward: Strin
         "projectedRegionalCarbonIntensity"] as? [[String: Any]]) ?? []
     var readings = parseOctopusCarbon(rows)
     guard !readings.isEmpty else {
-        throw ApiError(message: "Octopus returned no carbon intensity for \(outward)")
+        throw ApiError(message: "Octopus returned no carbon intensity for \(outward)", invalidatesSession: false)
     }
 
     // Octopus relays the same forecast National Grid publishes, glitches included, but carries no
@@ -438,9 +467,6 @@ private func fetchNationalGridCarbon(
 /// Half-hourly slots keyed to the second, so three sources can be joined by period start.
 private func slotKey(_ date: Date) -> Int { Int(date.timeIntervalSince1970 / 1800) }
 
-/// GB demand in MW per half hour: settled outturn for the past, day-ahead forecast for the near
-/// future. Both are asked for every time — a window can straddle now, and neither covers the
-/// other's half.
 /// Elexon numbers settlement periods from *local* midnight, half hour by half hour, and dates a
 /// settlement day by its local date. Used only to name a period when asking which publication
 /// covers it, so the two long days a year do not matter: a neighbouring period identifies the
@@ -457,6 +483,9 @@ private func settlementRef(_ date: Date) -> (date: String, period: Int) {
     return (formatter.string(from: midnight), Int(date.timeIntervalSince(midnight) / 1800) + 1)
 }
 
+/// GB demand in MW per half hour: settled outturn for the past, day-ahead forecast for the near
+/// future. Both are asked for every time — a window can straddle now, and neither covers the
+/// other's half.
 func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     let iso = DateFormatter()
     iso.locale = Locale(identifier: "en_US_POSIX")
@@ -546,9 +575,9 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     return demand
 }
 
-/// The GB generation mix per half hour. Outturn only — asking for a future range silently clamps
-/// to the last published period, which is why the forecast half of a window keeps the regional
-/// split instead.
+/// The GB generation mix per half hour. A range spanning now comes back whole, forecast included;
+/// only a range whose *start* is in the future silently clamps to the last published half hour.
+/// Where a slot is missing, the regional forecast split stands in, and `mixBasis` says which.
 func fetchNationalMix(from: Date, to: Date) async -> [Int: [FuelShare]] {
     let iso = DateFormatter()
     iso.locale = Locale(identifier: "en_US_POSIX")

@@ -423,15 +423,9 @@ final class CarbonChartView: NSView {
         case .mix:
             // Only fuels that actually appear, with their mean share — nine entries of which
             // several are flat zero would crowd out the ones that matter.
-            // Averages skip the implausible half hours, or one bad sunrise drags the whole
-            // window's solar figure up with it. The divisor has to skip them too.
-            let usable = readings.filter { !$0.suspectMix }
+            let means = averageMix(readings)
             for fuel in GridFuel.allCases {
-                let shares = usable.compactMap { reading in
-                    reading.mix.first { $0.fuel == fuel }?.percent
-                }
-                guard !shares.isEmpty else { continue }
-                let mean = shares.reduce(0, +) / Double(max(1, usable.count))
+                guard let mean = means[fuel] else { continue }
                 // Below half a percent it would print as "0%", which says nothing and crowds out
                 // the fuels that matter.
                 guard mean >= 0.5 else { continue }

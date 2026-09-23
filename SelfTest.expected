@@ -1,0 +1,271 @@
+--- charging status
+  charging, suspended: Charging 7.2 kW · smart control paused
+  charging, smart: Charging 7.2 kW · smart charging
+  idle, suspended: Smart control paused
+  idle, suspended, no control: Not charging · smart control not available
+  offline, suspended: Lost connection to car
+  idle, plugged in: Not charging
+  nothing known: (no line)
+--- usage banding
+  threshold: 18.64p
+  CONSUMPTION_CHARGE_ECO7_NIGHT_H @ 6.90p -> Off-peak
+  CONSUMPTION_CHARGE_ECO7_DAY_H @ 30.37p -> Standard
+  CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H @ 6.90p -> Off-peak
+  CONSUMPTION_CHARGE_EV_DEVICE_PEAK_H @ 30.37p -> Standard
+  Sat 19 Sep: Standard 1.5kWh @ 30.37p, Off-peak 5.0kWh @ 6.90p  [smart charge]
+  flat tariff threshold: none
+  flat tariff bands: ["Standard"]
+  half hour 00:00–00:30: Off-peak 3.0kWh
+  half hour 13:00–13:30: Standard 1.5kWh + Off-peak 2.0kWh  [smart charge]
+  window 18–20 Sep with data only on the 19th -> 3 columns:
+    Fri 18 Sep: no data published
+    Sat 19 Sep: 6.5 kWh
+    Sun 20 Sep: no data published
+  reading shapes:
+    gas, one bucket, null value: 10.7541 kWh @ 5.97p
+    electricity, bucket carries kWh: 3.0000 kWh @ 6.90p
+    two buckets, both null: nothing parsed
+  zero-usage day: hasData true, total 0.0 kWh, standing £0.33
+  standing charge as a band:
+    kWh/day         : Standard 1.5, Off-peak 5.0  total 6.5
+    money/day       : Standing charge £0.33, Standard £0.46, Off-peak £0.34  total £1.13
+    money/half hour : Standing charge £0.33, Standard £0.46, Off-peak £0.34  total £1.13
+  week windows (7 days each):
+    0 weeks back: Thu 17 Sep – Wed 23 Sep
+    1 weeks back: Thu 10 Sep – Wed 16 Sep
+    2 weeks back: Thu 3 Sep – Wed 9 Sep
+  VAT handling:
+    standard: 28.9251p ex VAT -> 30.3714p incl
+    off-peak: 6.5714p ex VAT -> 6.9000p incl
+  dispatch changes:
+    unchanged       : no alert
+    shifted 3 min   : no alert
+    shifted 40 min  : Smart charge plan changed — Now planned for 02:10–04:40.
+    slot added      : Smart charge plan changed — Now planned for 01:30–04:00, 14:00–15:00.
+    slot dropped    : Smart charge slot dropped — Now planned for 01:30–04:00.
+    all cancelled   : Smart charge cancelled — No charge is planned.
+    first plan      : Smart charge planned — Now planned for 01:30–04:00.
+  dispatch alert cooldown:
+    change inside the cooldown  : 0m Smart charge plan changed → 5m held → 11m Smart charge plan changed
+    flap that settles back      : 0m Smart charge plan changed → 3m held → 6m quiet → 12m quiet
+  device query failure:
+    after a good fetch: cars 2, planned 1, known true, cheap at 12:30Z true
+    first fetch: known false, menu says "Couldn't load smart devices"
+  tariff end dates:
+    electricity  Octopus 12M Fixed        1 Test Lane    last day Thu 8 Oct 2026
+    gas          Octopus 12M Fixed        1 Test Lane    last day Thu 8 Oct 2026
+    gas          Octopus 12M Fixed        1 Test Lane    last day Thu 8 Oct 2026
+    gas          Octopus 12M Fixed        9 Other Road   last day Thu 8 Oct 2026
+    electricity  Octopus 24M Fixed        9 Other Road   last day Tue 20 Oct 2026
+    electricity  Intelligent Octopus Go   1 Test Lane    no end date
+    6 agreements, 2 properties; 5 end within 60 days
+  tariff alert thresholds (daysLeft, already alerted -> new alert):
+    45  days, alerted never -> silent
+    30  days, alerted never -> alert at 30
+    16  days, alerted 30 -> silent
+    16  days, alerted never -> alert at 30
+    14  days, alerted 30 -> alert at 14
+    7   days, alerted 14 -> alert at 7
+    1   days, alerted 7 -> alert at 1
+    0   days, alerted 1 -> silent
+    0   days, alerted never -> alert at 1
+  charge goal from the SmartFlex schedule:
+    percentage, every day 07:00/80: target 80%, ready by 07:00
+    percentage, weekend differs   : target 90%, ready by 09:30
+    kilowatt-hour target          : target none, ready by 07:00
+    no schedules                  : target none, ready by unknown
+    no preferences at all: unknown
+  balance wording:
+    53206p -> £532.06 in credit
+    71062p -> £710.62 in credit
+    0p -> £0.00 in credit
+    -1250p -> £12.50 owed
+  carbon intensity parsing:
+    index spellings: VERY_LOW->Very low, very low->Very low, Very High->Very high, moderate->Moderate, nonsense->unparsed
+    outward codes: 'SN13 9XX'->'SN13', 'sn13 9xx'->'SN13', 'SN139XX'->'SN13', 'M1 1AA'->'M1', 'M11AA'->'M1', 'SN13'->'SN13', 'M1'->'M1', ''->''
+    Octopus: 3 of 4 rows parsed
+      19:30–20:00 289 gCO₂/kWh Very high mix=0
+      20:00–20:30 298 gCO₂/kWh Very high mix=0
+      20:30–21:00 287 gCO₂/kWh Very high mix=0
+    National Grid: 2 of 3 rows parsed
+      18:30–19:00 291 gCO₂/kWh Very high [Gas 69.9, Wind 2.6]
+      19:00–19:30 273 gCO₂/kWh Very high [Gas 65.5]
+    sample forecast: 96 half hours, cleanest Thu 00:00 at 56 gCO₂/kWh
+    freshness: forecast just fetched=true, an hour old=false
+    freshness: past week after a day=true, current week after a day=false
+    fuel mapping: Other 3.1, Gas 42.9, Nuclear 20.0, Wind 34.0
+    stack order matches GridFuel: true, total 100.0
+    mix basis wording:
+      all national, all past              : mix: GB actual, hasDemand=true
+      all national, all ahead             : mix: GB forecast, hasDemand=true
+      national, past then ahead           : mix: GB actual, then GB forecast, hasDemand=true
+      all regional, no demand             : mix: South England forecast share, hasDemand=false
+      national then regional, part demand : mix: GB actual, then South England forecast share, hasDemand=true
+    implausible mix screening (real values):
+      05:30Z  78.3% solar                 : implied solar 19.0 GW   -> SUSPECT
+      06:00Z  84.5% solar                 : implied solar 22.5 GW   -> SUSPECT
+      06:30Z   2.2% solar                 : implied solar 0.6 GW    -> ok
+      midsummer noon, 30% of a low demand : implied solar 7.2 GW    -> ok
+      no demand known                     : implied solar unknown   -> ok
+      ceiling 16 GW, against a GB record near 14 GW
+    demand gaps:
+      settled, an hour ago            : none
+      just ended, not yet published   : stillRunning
+      in progress                     : stillRunning
+      forecast, later tonight         : none
+      past the forecast horizon       : beyondForecast
+    cleanest excludes implausible readings:
+      values [52, 284, 5, 49, 37] -> cleanest 37 gCO₂/kWh, 1 suspect
+    mean mix skips implausible half hours:
+      gas 40.0%, solar 60.0% (with the glitch counted: gas 30.5%)
+    power formatting: 30.6 GW, 21.8 GW, 1.1 GW, 0.0 GW
+  carbon window navigation:
+    back, back, back, forward, forward, forward: week -0 → week -1 → week -2 → week -1 → week -0 → forecast
+  completeness:
+    page size per local day: spring forward 46, ordinary 48, fall back 50
+    half-hourly, all 50 published on the day the clocks go back: complete=true
+    half-hourly, 2 of 48 published: complete=false
+    half-hourly, all 48 published: complete=true
+    daily meter, day published: complete=true
+  cache freshness:
+    settled week, fetched months ago: true
+    incomplete week, fetched months ago: false
+    incomplete week, fetched just now: true
+  axis scale (max, step, ticks):
+    3.9 -> max 4 step 1: 0, 1, 2, 3, 4
+    2.5 -> max 2.5 step 0.5: 0, 0.5, 1, 1.5, 2, 2.5
+    5.0 -> max 5 step 1: 0, 1, 2, 3, 4, 5
+    7.4 -> max 8 step 2: 0, 2, 4, 6, 8
+    39.4 -> max 40 step 10: 0, 10, 20, 30, 40
+    59.3 -> max 60 step 10: 0, 10, 20, 30, 40, 50, 60
+    417.0 -> max 500 step 100: 0, 100, 200, 300, 400, 500
+    0.3 -> max 0.3 step 0.05: 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3
+    0.0 -> max 1 step 1: 0, 1
+  login item advice:
+    enabled           : (nothing to say)
+    requires approval : macOS needs you to allow it in System Settings → General → Login Items.
+    not found         : macOS can't find the app bundle. Install it with ./install.sh and try again.
+    not registered    : (nothing to say)
+  account and tariff sections (single-property account adds no addresses):
+    [Account]
+    Balance: £532.06 in credit
+        £710.62 in credit expected in a year
+    [Tariffs]
+    Intelligent Octopus Go (electricity)
+        No end date
+    Octopus 12M Fixed (gas)
+        Ends Thu 8 Oct · in 19 days
+  tariff end wording:
+    0 days: menu "Ends Sat 19 Sep · last day today", alert "Octopus 12M Fixed ends today"
+    1 day: menu "Ends Sun 20 Sep · tomorrow", alert "Octopus 12M Fixed ends tomorrow"
+    14 days: menu "Ends Sat 3 Oct · in 14 days", alert "Octopus 12M Fixed ends in 14 days"
+  planned charge line:
+    one smart slot      : Charging 00:30–04:00 · about 18 kWh planned
+    two slots, summed   : Charging 00:30–04:00, 05:30–06:00 · about 20 kWh planned
+    a boost             : Boost charge 21:00–22:00 · about 5 kWh planned
+    no energy stated    : (no line)
+    nothing planned     : (no line)
+    only past slots     : (no line)
+  next rate change:
+    standard, hours before              : Sat 23:30 -> cheap
+    standard, ten minutes before        : Sat 23:30 -> cheap
+    inside the cheap window             : Sun 05:30 -> standard
+    cheap, ten minutes before it ends   : Sun 05:30 -> standard
+    between the window and the dispatch : Sun 13:00 -> cheap
+    inside the smart-charge dispatch    : Sun 14:30 -> standard
+    after everything                    : no change ahead
+--- Sat 16:13 BST: cheap=false
+  [Standard rate now · 30.37p/kWh]
+  Cheap from Today 23:30 (6.90p/kWh)
+  Prices include VAT · standing charge 54.81p/day · updated 16:13
+  ------
+  [Upcoming cheap rate]
+  Today 23:30 – Tomorrow 05:30
+  Tomorrow 13:00 – 14:30  (smart charge)
+  Tomorrow 23:30 – Mon 05:30
+  ------
+  [Cars]
+  Charging 13:00–14:30 · about 8 kWh planned
+  Mini Cooper: 62% (target 80% by 07:00)
+      About 30.5 of 49.2 kWh in the battery
+      Not charging · smart control not available
+      Charge level as of Today 15:08
+  Test EV: 45% (target 80%)
+      Charging 7.2 kW · smart charging
+      Charge level as of Today 16:10
+  ------
+  [Account]
+  Balance: £532.06 in credit
+      £710.62 in credit expected in a year
+  ------
+  [Tariffs]
+  Octopus 12M Fixed (electricity) at 9 Other Road
+      Ends Thu 8 Oct · in 19 days
+  Octopus 12M Fixed (gas) at 1 Test Lane
+      Ends Thu 8 Oct · in 19 days
+  Octopus 12M Fixed (gas) at 9 Other Road
+      Ends Thu 8 Oct · in 19 days
+  Intelligent Octopus Go (electricity) at 1 Test Lane
+      No end date
+--- Sun 02:00 BST: cheap=true
+  [Cheap rate now · 6.90p/kWh]
+  Back to standard at Today 05:30 (30.37p/kWh)
+  Prices include VAT · standing charge 54.81p/day · updated 16:13
+  ------
+  [Upcoming cheap rate]
+  Now – Today 05:30
+  Today 13:00 – 14:30  (smart charge)
+  Today 23:30 – Tomorrow 05:30
+  Tomorrow 23:30 – Tue 05:30
+  ------
+  [Cars]
+  Charging 13:00–14:30 · about 8 kWh planned
+  Mini Cooper: 62% (target 80% by 07:00)
+      About 30.5 of 49.2 kWh in the battery
+      Not charging · smart control not available
+      Charge level as of Yesterday 15:08
+  Test EV: 45% (target 80%)
+      Smart charging scheduled
+      Charge level as of Yesterday 16:10
+  ------
+  [Account]
+  Balance: £532.06 in credit
+      £710.62 in credit expected in a year
+  ------
+  [Tariffs]
+  Octopus 12M Fixed (electricity) at 9 Other Road
+      Ends Thu 8 Oct · in 18 days
+  Octopus 12M Fixed (gas) at 1 Test Lane
+      Ends Thu 8 Oct · in 18 days
+  Octopus 12M Fixed (gas) at 9 Other Road
+      Ends Thu 8 Oct · in 18 days
+  Intelligent Octopus Go (electricity) at 1 Test Lane
+      No end date
+--- flat tariff: cheap=false
+  [Single rate · 30.37p/kWh]
+  This tariff has no cheap window
+  Prices include VAT · standing charge 54.81p/day · updated 16:13
+  ------
+  [Cars]
+  Charging 13:00–14:30 · about 8 kWh planned
+  Mini Cooper: 62% (target 80% by 07:00)
+      About 30.5 of 49.2 kWh in the battery
+      Not charging · smart control not available
+      Charge level as of Yesterday 15:08
+  Test EV: 45% (target 80%)
+      Smart charging scheduled
+      Charge level as of Yesterday 16:10
+  ------
+  [Account]
+  Balance: £532.06 in credit
+      £710.62 in credit expected in a year
+  ------
+  [Tariffs]
+  Octopus 12M Fixed (electricity) at 9 Other Road
+      Ends Thu 8 Oct · in 18 days
+  Octopus 12M Fixed (gas) at 1 Test Lane
+      Ends Thu 8 Oct · in 18 days
+  Octopus 12M Fixed (gas) at 9 Other Road
+      Ends Thu 8 Oct · in 18 days
+  Intelligent Octopus Go (electricity) at 1 Test Lane
+      No end date
