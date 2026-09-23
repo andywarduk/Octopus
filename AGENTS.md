@@ -9,7 +9,13 @@ obvious and cost time to rediscover.
 ```bash
 ./build.sh                                          # compiles every .swift in the root
 open build/OctopusMenuBar.app
+./install.sh [destination]                          # build, then install (default /Applications)
 ```
+
+`install.sh` resolves its destination before doing anything destructive — `./install.sh /` is
+refused — quits a running copy so the bundle is not swapped underneath it, and replaces rather
+than copies over, since a file left by an older build would still be inside the bundle and still
+be loaded. A failure to launch at the end is reported but does not fail the install.
 
 `build.sh` compiles the whole root directory into one binary, renders the app icon into
 `AppIcon.icns`, and ad-hoc signs the bundle. If `iconutil` fails the build still succeeds and

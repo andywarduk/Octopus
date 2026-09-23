@@ -18,6 +18,19 @@ There are also three command-line scripts covering the same ground, for the term
 Requires macOS 13 or later and Xcode's command line tools.
 
 ```bash
+./install.sh          # build, then install into /Applications and launch
+```
+
+`install.sh` quits any running copy first, replaces the installed bundle outright rather than
+copying over it, and takes a destination if you would rather not touch `/Applications`:
+
+```bash
+./install.sh ~/Applications    # no admin rights needed
+```
+
+To build without installing:
+
+```bash
 ./build.sh
 open build/OctopusMenuBar.app
 ```
