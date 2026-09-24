@@ -391,7 +391,9 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
         tariff = cached
     } else {
         // Balance and agreement end dates hang off the same `account` node as the tariff, so they
-        // ride along on this request rather than costing another one.
+        // ride along on this request rather than costing another one. Intelligent Octopus Go
+        // arrives as a HalfHourlyTariff, whose unitRates list is of unknown shape, so only its
+        // standing charge is taken; its prices come from applicableRates.
         let agr = try await gql(
             """
             query($a:String!){account(accountNumber:$a){
@@ -411,6 +413,7 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
                   ... on FourRateEvTariff{
                     dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge
                   }
+                  ... on HalfHourlyTariff{standingCharge}
                 }
               }
               properties{

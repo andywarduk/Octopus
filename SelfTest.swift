@@ -261,6 +261,16 @@ func selfTest() {
     let agile = try? parseTariffState(agileNode, account: "A-1", mpan: "1000", now: fetchedTariff)
     print("    tariff with no fixed rates: ratesFromTariff=\(agile?.ratesFromTariff ?? true), "
         + "windows \(agile?.windows.map { "\(clockTime($0.from))–\(clockTime($0.to))" } ?? [])")
+    // Intelligent Octopus Go arrives as a HalfHourlyTariff: no named rates, but a standing charge.
+    let iogNode: [String: Any] = [
+        "electricityAgreements": [
+            ["meterPoint": ["mpan": "1000"],
+             "tariff": ["__typename": "HalfHourlyTariff", "displayName": "Intelligent Octopus Go", "standingCharge": 49.41]],
+        ],
+    ]
+    let iog = try? parseTariffState(iogNode, account: "A-1", mpan: "1000", now: fetchedTariff)
+    print("    HalfHourlyTariff: ratesFromTariff=\(iog?.ratesFromTariff ?? true), "
+        + "standing \(iog?.standingCharge.map { String(format: "%.2fp", $0) } ?? "none")")
     let reply: [String: Any] = [
         "devices": [
             ["__typename": "SmartFlexVehicle", "id": "d1", "make": "MINI", "model": "Cooper",

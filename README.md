@@ -4,7 +4,7 @@ A macOS menu bar app for Octopus Energy, built around Intelligent Octopus Go. It
 are on the cheap or standard rate right now, when that next changes, your car's charge level, and
 charts of your electricity and gas use.
 
-There are also three command-line scripts covering the same ground, for the terminal or for cron.
+There are also four command-line scripts covering the same ground, for the terminal or for cron.
 
 > **This project was vibe-coded.** Every line was written by Claude (Anthropic's Claude Code) from
 > conversational prompts, then checked against a real Octopus account. It has no test suite beyond
@@ -195,7 +195,26 @@ Octopus 12M Fixed (gas) ends Thu 8 Oct — in 16 days
 ```bash
 OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --days 7
 OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --meters    # list meters
+OCTOPUS_API_KEY=sk_live_... python3 octopus_history.py --days 7 --dispatches --sessions
 ```
+
+`--dispatches` lists the smart charges Octopus completed against the rate each half hour was
+billed at, and any car-sized standard-rate half hour no charge accounts for. Octopus keeps only
+about a day of completed charges, and the script says so rather than judging older half hours.
+
+`octopus_compare.py` prices your last year of half-hourly electricity on Octopus's other tariffs —
+Agile, Go, Go 12M Fixed, Flexible, and the 12M and 18M fixes — against your current one:
+
+```bash
+OCTOPUS_API_KEY=sk_live_... python3 octopus_compare.py
+OCTOPUS_API_KEY=sk_live_... python3 octopus_compare.py --plugged-in 00:00-00:00   # car always plugged in
+```
+
+The house is priced where it happened. The car's energy is found in your usage and recharged in
+the cheapest half hours of each night's plug-in window (18:00–07:00 by default) at up to the
+charger's rating. Agile is priced at its real prices over the period, everything else at today's
+rates. The first run fetches a day per request and caches them in `~/.cache/octopus_compare/`, so
+later runs only fetch new days.
 
 `octopus_carbon.py` prints the carbon intensity chart as text. It needs **no API key** unless you
 want the Octopus source or want the postcode looked up from your account:

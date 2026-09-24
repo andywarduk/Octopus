@@ -15,6 +15,8 @@ Usage:
 Options:
   --days N        days back to pull (default 7)
   --sessions      also list the car's charging sessions
+  --dispatches    also list the smart charges Octopus ran, the rate each half hour was billed at,
+                  and any car-sized standard-rate draw that no charge accounts for
   --csv FILE      write every half hour to a CSV
   --debug         print the raw response for the first day
 """
@@ -77,6 +79,14 @@ MEASUREMENTS_QUERY = """query($p:ID!,$s:DateTime!,$e:DateTime!,$mpan:String!,$tz
     }
   }
 }"""
+
+DISPATCHES_QUERY = """query($a:String!){completedDispatches(accountNumber:$a){
+  start end delta meta{source location}
+}}"""
+
+# A half hour drawing this much or more at the standard rate looks like the car, not the house:
+# 1.5 kWh is 3 kW sustained, well above a household baseline and well below a 7 kW charger.
+CAR_SIZED_KWH = 1.5
 
 SESSIONS_QUERY = """query($a:String!,$after:DateTime!){devices(accountNumber:$a){
   __typename
@@ -222,6 +232,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--sessions", action="store_true")
+    parser.add_argument("--dispatches", action="store_true")
     parser.add_argument("--csv")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--mpan", help="which import meter to use, if the account has several")
@@ -407,6 +418,9 @@ def main():
                 ])
         print(f"\nWrote {len(rows)} rows to {args.csv}")
 
+    if args.dispatches:
+        print_dispatches(account, token, rows, threshold, days[0], tz)
+
     if args.sessions:
         print("\nCharging sessions")
         after = (today - timedelta(days=args.days - 1)).astimezone(timezone.utc)
@@ -427,7 +441,9 @@ def main():
                 amount = to_float(money.get("amount"))
                 parts = [f"  {label}  {began.astimezone(tz):%a %d %b %H:%M}"]
                 if ended:
-                    parts.append(f"–{ended.astimezone(tz):%H:%M}")
+                    # Overnight sessions end the next day; a bare time read as ending before it began.
+                    same_day = ended.astimezone(tz).date() == began.astimezone(tz).date()
+                    parts.append(f"–{ended.astimezone(tz):{'%H:%M' if same_day else '%a %d %b %H:%M'}}")
                 if added is not None:
                     parts.append(f"  {to_float(added):.2f} kWh")
                 if amount is not None:
@@ -443,6 +459,92 @@ def main():
                     )
         if not found:
             print("  none in this period")
+
+
+def print_dispatches(account, token, rows, threshold, since, tz):
+    """Smart charges Octopus says it ran, against the rate each half hour was actually billed at.
+
+    A dispatch outside the off-peak window should be billed cheap. One billed at the standard rate
+    is a billing question for Octopus; a car-sized draw at the standard rate with no dispatch at
+    all was started by something else — the car's own timer, the charger, or a boost.
+    """
+    print("\nCompleted smart charges")
+    try:
+        dispatches = gql(DISPATCHES_QUERY, {"a": account}, token).get("completedDispatches") or []
+    except RuntimeError as exc:
+        print(f"  unavailable ({exc})")
+        return
+    by_start = {row["start"]: row for row in rows}
+    covered = set()
+    shown = 0
+    # The list is patchy, not a rolling window: on the account this was written against it returned
+    # something older than the period while missing smart charges the bill proves ran within it.
+    # Say what was left out, so its shape is visible rather than guessed at.
+    older = sorted(
+        parse(d["start"]) for d in dispatches
+        if d.get("start") and d.get("end") and parse(d["end"]) <= since)
+    if older:
+        print(f"  ({len(older)} older, not shown: {older[0].astimezone(tz):%a %d %b} "
+              f"to {older[-1].astimezone(tz):%a %d %b})")
+    for dispatch in sorted(dispatches, key=lambda d: d.get("start") or ""):
+        start, end = parse(dispatch.get("start")), parse(dispatch.get("end"))
+        if not start or not end or end <= since:
+            continue
+        shown += 1
+        same_day = start.astimezone(tz).date() == end.astimezone(tz).date()
+        span = (f"{start.astimezone(tz):%a %d %b %H:%M}–"
+                f"{end.astimezone(tz):{'%H:%M' if same_day else '%a %d %b %H:%M'}}")
+        # Import is stated negative; the sign says nothing the heading doesn't.
+        delta = to_float(dispatch.get("delta"))
+        meta = dispatch.get("meta") or {}
+        extras = [f"{abs(delta):.2f} kWh" if delta is not None else None,
+                  meta.get("source"), meta.get("location")]
+        print(f"  {span}  " + "  ".join(e for e in extras if e))
+        # The half hours the dispatch touches, and what each was billed at.
+        slot = start.replace(minute=0 if start.minute < 30 else 30, second=0, microsecond=0)
+        while slot < end:
+            covered.add(slot)
+            row = by_start.get(slot)
+            if row is None:
+                print(f"      {slot.astimezone(tz):%H:%M}  not published")
+            elif row["rate"] is None:
+                print(f"      {slot.astimezone(tz):%H:%M}  {row['kwh'] or 0:.2f} kWh, too little to price")
+            else:
+                cheap = threshold is not None and row["rate"] < threshold
+                flag = "" if cheap or threshold is None else "   <-- billed at the standard rate"
+                print(f"      {slot.astimezone(tz):%H:%M}  {row['kwh'] or 0:.2f} kWh @ {row['rate']:.2f}p{flag}")
+            slot += timedelta(minutes=30)
+    if not shown:
+        print("  none in this period")
+
+    if threshold is None:
+        return
+    car_sized = [
+        row for row in sorted(rows, key=lambda r: r["start"])
+        if row["rate"] is not None and row["rate"] >= threshold
+        and (row["kwh"] or 0) >= CAR_SIZED_KWH and row["start"] not in covered
+    ]
+    # The bill is the check on the list: a half hour billed as a smart charge that no listed
+    # dispatch covers proves the list is missing dispatches, and then "no dispatch" proves nothing.
+    missed = [
+        row for row in rows
+        if any("EV_DEVICE" in bucket for bucket in row["buckets"]) and row["start"] not in covered
+    ]
+    print(f"\nStandard-rate half hours of {CAR_SIZED_KWH} kWh or more with no smart charge")
+    if missed:
+        first, last = min(r["start"] for r in missed), max(r["start"] for r in missed)
+        print(f"  Can't tell: {len(missed)} half hours billed as smart charges "
+              f"({first.astimezone(tz):%a %d %b %H:%M} to {last.astimezone(tz):%a %d %b %H:%M})")
+        print("  are missing from Octopus's completed list, so a missing one proves nothing. Candidates:")
+        for row in car_sized:
+            print(f"    {row['start'].astimezone(tz):%a %d %b %H:%M}  {row['kwh']:.2f} kWh @ {row['rate']:.2f}p")
+        if not car_sized:
+            print("    none")
+        return
+    for row in car_sized:
+        print(f"  {row['start'].astimezone(tz):%a %d %b %H:%M}  {row['kwh']:.2f} kWh @ {row['rate']:.2f}p")
+    if not car_sized:
+        print("  none")
 
 
 if __name__ == "__main__":

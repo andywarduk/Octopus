@@ -150,9 +150,17 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   28.9251 × 1.05 = 30.37136 and 6.5714 × 1.05 = 6.89997, both matching the measurements exactly.
   Mixing the two put an ex-VAT price in the menu bar and an inc-VAT one in the chart for the same
   electricity. **Everything shown to the user now includes VAT.** Prefer the agreement's
-  `tariff` rates, which include VAT and come named (`dayRate`, `evDeviceOffPeakRate`, …) alongside
-  `preVat…` siblings and a `standingCharge`; `applicableRates` is the fallback for tariffs with no
-  fixed rates, such as Agile, and is grossed up by `vatMultiplier`.
+  `tariff` rates where they exist: the fixed-rate types (`StandardTariff`, `DayNightTariff`,
+  `FourRateEvTariff`, …) name them (`dayRate`, `evDeviceOffPeakRate`, …) including VAT, alongside
+  `preVat…` siblings and a `standingCharge`. `applicableRates` is the fallback, grossed up by
+  `vatMultiplier`.
+- **Intelligent Octopus Go is a `HalfHourlyTariff`, not a `FourRateEvTariff`.** On the development
+  account the agreement's tariff arrives as `HalfHourlyTariff`, which has no named rates — only
+  `standingCharge`, `preVatStandingCharge` and a `unitRates` list whose contents have not been
+  inspected. So the app's prices for that tariff come from the `applicableRates` fallback, and
+  for a long time the standing charge came from nowhere: the query didn't ask this type for it,
+  and the menu's footnote silently dropped it. The query now takes `standingCharge` from it. The
+  earlier claim here that the agreement's rates "come named" held only for the fixed-rate types.
 - **The per-device buckets are a billing allocation, not a measurement.** On Intelligent Octopus,
   `EV_DEVICE_OFF_PEAK` is a fixed slice (2.611 kWh per half hour on the account this was built
   against) and the rest of the car's draw lands in the household bucket at the same price. Do not

@@ -206,6 +206,7 @@ account_node = run(
           ... on DayNightTariff{dayRate nightRate standingCharge}
           ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
           ... on FourRateEvTariff{dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge}
+          ... on HalfHourlyTariff{standingCharge}
         }
       }
       properties{
