@@ -65,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var failures = 0
     var autoRefreshPaused = false
     var menuIsOpen = false
+    /// What the status item last showed, so a tick that changes nothing doesn't redraw it.
+    var shownIcon: String?
     static let maxFailures = 10
     static let leadTime: TimeInterval = 10 * 60
     var notifyEnabled: Bool { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
@@ -86,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        // Lets macOS fold the wakeup in with others rather than waking just for this. A tick can
+        // only land late, never early, and nothing here needs better than a few seconds.
+        timer.tolerance = 3
         RunLoop.main.add(timer, forMode: .common)
 
         // Timers don't fire while the Mac is asleep, so catch up rather than wait out the interval.
@@ -130,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let generation = fetchGeneration
         Task {
             do {
-                let fetched = try await fetchSnapshot(apiKey: key)
+                let fetched = try await fetchSnapshot(apiKey: key, force: manual)
                 // Started under another key or meter: its answer is to a question nobody is asking.
                 if generation == fetchGeneration {
                     // The old plan to compare against, taken now rather than when the fetch began

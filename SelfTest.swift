@@ -149,7 +149,8 @@ func selfTest() {
 
     print("  week windows (7 days each):")
     for back in [0, 1, 2] {
-        let w = usageDateWindow(weeksBack: back, days: 7, tz: tzLondon)
+        // A fixed day, not the clock, or the expected output goes stale at midnight.
+        let w = usageDateWindow(weeksBack: back, days: 7, tz: tzLondon, now: date("2026-09-23T12:00:00Z"))
         let last = calendar(tzLondon).date(byAdding: .day, value: -1, to: w.to)!
         print("    \(back) weeks back: \(formatted(w.from, "EEE d MMM", tzLondon)) – \(formatted(last, "EEE d MMM", tzLondon))")
     }
@@ -225,6 +226,54 @@ func selfTest() {
         return nil
     }
     print("    first fetch: known \(uncarried.devicesKnown), menu says \"\(deviceLines.joined())\"")
+
+    // A refresh reuses the tariff for an hour, but never across a meter change or when asked for.
+    print("  refresh split:")
+    let fetchedTariff = date("2026-09-19T15:00:00Z")
+    let cachedTariff = TariffState(
+        accountNumber: "A-1", mpan: "1000", cheapRate: 6.9, peakRate: 30.37, windows: fallbackWindows,
+        tz: tzLondon, tariffEnds: [], propertyCount: 1, fetched: fetchedTariff)
+    for (label, cached, mpan, minutes, force) in [
+        ("5 min old", cachedTariff, "1000", 5.0, false),
+        ("59 min old", cachedTariff, "1000", 59, false),
+        ("61 min old", cachedTariff, "1000", 61, false),
+        ("Refresh Now", cachedTariff, "1000", 5, true),
+        ("another meter", cachedTariff, "2000", 5, false),
+        ("nothing cached", nil, "1000", 5, false),
+    ] as [(String, TariffState?, String, Double, Bool)] {
+        let reuse = tariffIsReusable(
+            cached, account: "A-1", mpan: mpan, now: fetchedTariff.addingTimeInterval(minutes * 60), force: force)
+        print("    tariff \(label.padding(toLength: 16, withPad: " ", startingAt: 0)): \(reuse ? "reused" : "fetched")")
+    }
+    func fieldCount(_ query: String) -> String {
+        let aliases = query.components(separatedBy: "flexPlannedDispatches").count - 1
+        return "\(aliases) plan alias\(aliases == 1 ? "" : "es"), rates \(query.contains("applicableRates") ? "included" : "omitted")"
+    }
+    print("    device query, fixed rates, no ids yet: \(fieldCount(deviceQuery(deviceIds: [], includeRates: false)))")
+    print("    device query, Agile, two ids: \(fieldCount(deviceQuery(deviceIds: ["d1", "d2"], includeRates: true)))")
+    let agileNode: [String: Any] = [
+        "balance": 1200,
+        "electricityAgreements": [
+            ["meterPoint": ["mpan": "1000"], "tariff": ["displayName": "Agile Octopus"],
+             "timeOfUseScheme": ["timezone": "Europe/London", "timeslots": []]],
+        ],
+    ]
+    let agile = try? parseTariffState(agileNode, account: "A-1", mpan: "1000", now: fetchedTariff)
+    print("    tariff with no fixed rates: ratesFromTariff=\(agile?.ratesFromTariff ?? true), "
+        + "windows \(agile?.windows.map { "\(clockTime($0.from))–\(clockTime($0.to))" } ?? [])")
+    let reply: [String: Any] = [
+        "devices": [
+            ["__typename": "SmartFlexVehicle", "id": "d1", "make": "MINI", "model": "Cooper",
+             "vehicleBatterySize": "49.2", "status": ["stateOfCharge": ["value": 62]]],
+            ["__typename": "SmartMeterDevice", "id": "m1"],
+        ],
+        "f0": [["start": "2026-09-19T23:30:00+00:00", "end": "2026-09-20T00:00:00+00:00",
+                "type": "SMART", "energyAddedKwh": -2.611]],
+        "completedDispatches": [["start": "2026-09-19T12:00:00+00:00", "end": "2026-09-19T12:30:00+00:00"]],
+    ]
+    let parsed = parseDeviceState(reply, deviceIds: ["d1"], now: fetchedTariff, tz: tzLondon)
+    print("    device reply: ids \(smartDeviceIds(reply)), cars \(parsed.cars.map(\.name)), "
+        + "dispatches \(parsed.dispatches.count), planned \(parsed.dispatches.compactMap(\.plannedKwh))")
 
     print("  tariff end dates:")
     // Shapes that must not become an expiry: no end date at all (a variable tariff), one that has

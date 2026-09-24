@@ -17,7 +17,8 @@ refused — quits a running copy so the bundle is not swapped underneath it, and
 than copies over, since a file left by an older build would still be inside the bundle and still
 be loaded. A failure to launch at the end is reported but does not fail the install.
 
-`build.sh` compiles the whole root directory into one binary, renders the app icon into
+`build.sh` compiles the whole root directory into one binary, as a whole module so the optimiser
+sees across files, renders the app icon into
 `AppIcon.icns`, and ad-hoc signs the bundle. If `iconutil` fails the build still succeeds and
 notifications fall back to a generic icon.
 
@@ -36,6 +37,9 @@ diff, then accept it with `./selftest.sh --update` and commit the new expected o
 code. The output is fixed-date and timezone-independent, so a diff always means something changed. The chart has repeatedly been broken in ways only visible in the
 rendered output. The sample week is seeded, so the images are identical run to run and a diff is
 meaningful.
+
+`--chartdemo` and `--iconset` create their output directory if it is missing; they used to write
+nothing into one that didn't exist, without saying so, which reads as every image having changed.
 
 `--chartdemo` renders the carbon chart as `carbon-*.png` alongside the usage ones. Its `now` rule
 is fixed rather than read from the clock, or the images differ run to run and a diff means nothing.
@@ -57,7 +61,7 @@ go stale overnight. It currently covers charging-status wording, band assignment
 tariff), both reading shapes, unpublished days, zero-usage days, week windows, cache freshness,
 axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge goal, balance
 wording, carbon parsing and its plausibility screening, the mix basis wording and mean mix, the
-dispatch alert cooldown, a failed device query, page sizes and completeness across a clock change,
+dispatch alert cooldown, a failed device query, the refresh split and its queries, page sizes and completeness across a clock change,
 tariff-end wording, login-item wording, and the menu text at three moments.
 
 ### Verifying UI changes without a display
@@ -80,7 +84,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
 | `Keychain.swift` | Reading, saving and removing the API key |
 | `MeterSelection.swift` | Fuels, discovering meters per property, saved choice per fuel |
-| `OctopusAPI.swift` | GraphQL transport, the shared token and meter cache, and the calls that build a `Snapshot` |
+| `OctopusAPI.swift` | GraphQL transport, the shared session cache, and the tariff and device halves of a `Snapshot` |
 | `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch |
 | `UsageChart.swift` | The stacked column chart, its palette, and the offscreen renderer |
 | `UsageWindowController.swift` | One usage window; one instance per fuel |
@@ -270,16 +274,27 @@ Built in Swift 6 language mode, so the usual traps apply:
 
 ## Request budget
 
-Octopus rate-limits by query complexity and an hourly point allowance. A menu-bar refresh costs
-three requests (agreements, devices, rates) every five minutes, every 30 seconds near a rate switch,
-and on opening the menu if the data is over a minute old. A usage window costs one request per day
-fetched — seven per week. These keep that in check and should not be undone lightly:
+Octopus rate-limits by query complexity and an hourly point allowance. A menu-bar refresh runs
+every five minutes, every 30 seconds near a rate switch, and on opening the menu if the data is
+over a minute old. It normally costs **one** request; it used to cost six. A usage window costs one
+request per day fetched — seven per week. These keep that in check and should not be undone
+lightly:
 
 - **The Kraken token and the discovered meters are shared** through `OctopusSession`. Every
-  refresh used to log in again and rediscover every meter, doubling its cost to six requests. The
-  token is kept 45 minutes (it lasts an hour) and the meters an hour; any failed request drops
-  both, so a revoked token or a changed account costs one failure rather than the full timeout.
-
+  refresh used to log in again and rediscover every meter. The token is kept 45 minutes (it lasts
+  an hour) and the meters an hour; any failed request drops everything cached, so a revoked token
+  or a changed account costs one failure rather than the full timeout.
+- **A refresh is split by how fast each half changes.** The tariff half — prices, schedule,
+  balance, agreements — changes a few times a year, so `TariffState` is reused for an hour
+  (`tariffIsReusable`), and refetched at once for "Refresh Now", a key change or a meter change.
+  The device half — devices, the charge plan and completed dispatches — is one request every
+  time, built by `deviceQuery`. A tariff with no fixed rates (Agile) needs `applicableRates`,
+  which slides with the clock, so that rides in the device request rather than the hourly one.
+- **The charge plan rides with the device list** because the device ids are remembered from the
+  previous refresh. `flexPlannedDispatches` is keyed by device, so the plan used to need a second
+  round trip after the device list. A device not seen before costs one follow-up request, once. A
+  failed device request forgets the ids — a stale id makes its alias error, and with it the whole
+  request — so the next attempt rediscovers them rather than failing the same way.
 - Fetched weeks are cached in memory, keyed by meter and week offset. A settled week is kept
   indefinitely; one still waiting on Octopus is re-checked after 15 minutes. The current week is
   never "settled", so it always re-checks.

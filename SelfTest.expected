@@ -51,6 +51,17 @@
   device query failure:
     after a good fetch: cars 2, planned 1, known true, cheap at 12:30Z true
     first fetch: known false, menu says "Couldn't load smart devices"
+  refresh split:
+    tariff 5 min old       : reused
+    tariff 59 min old      : reused
+    tariff 61 min old      : fetched
+    tariff Refresh Now     : fetched
+    tariff another meter   : fetched
+    tariff nothing cached  : fetched
+    device query, fixed rates, no ids yet: 0 plan aliases, rates omitted
+    device query, Agile, two ids: 2 plan aliases, rates included
+    tariff with no fixed rates: ratesFromTariff=false, windows ["23:30–05:30"]
+    device reply: ids ["d1"], cars ["MINI Cooper"], dispatches 2, planned [2.611]
   tariff end dates:
     electricity  Octopus 12M Fixed        1 Test Lane    last day Thu 8 Oct 2026
     gas          Octopus 12M Fixed        1 Test Lane    last day Thu 8 Oct 2026

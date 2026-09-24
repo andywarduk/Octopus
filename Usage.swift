@@ -218,9 +218,9 @@ func measurementsQuery(for fuel: Fuel) -> String {
 }
 
 /// The local window shown for a week offset: 0 is the week ending today, 1 the week before.
-func usageDateWindow(weeksBack: Int, days: Int, tz: TimeZone) -> (from: Date, to: Date) {
+func usageDateWindow(weeksBack: Int, days: Int, tz: TimeZone, now: Date = Date()) -> (from: Date, to: Date) {
     let cal = calendar(tz)
-    let today = cal.startOfDay(for: Date())
+    let today = cal.startOfDay(for: now)
     let lastDay = cal.date(byAdding: .day, value: -7 * weeksBack, to: today) ?? today
     let from = cal.date(byAdding: .day, value: -(days - 1), to: lastDay) ?? lastDay
     return (from, cal.date(byAdding: .day, value: 1, to: lastDay) ?? lastDay)

@@ -7,7 +7,8 @@ APP="build/OctopusMenuBar.app"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS"
 
-swiftc -O -o "$APP/Contents/MacOS/OctopusMenuBar" *.swift
+# Whole-module, so the optimiser can see across files rather than one file at a time.
+swiftc -O -wmo -o "$APP/Contents/MacOS/OctopusMenuBar" *.swift
 
 # Notifications take their icon from the bundle, so render the app icon into an .icns.
 mkdir -p "$APP/Contents/Resources" build/AppIcon.iconset

@@ -9,8 +9,15 @@
 import Cocoa
 
 // OctopusMenuBar --iconset DIR : write the PNGs that `iconutil -c icns` expects.
+/// Creates an output directory for the flags below. Writing into one that doesn't exist fails
+/// silently, which looks like a render that produced different images from last time.
+func outputDirectory(_ path: String) -> String {
+    try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    return path
+}
+
 if let i = CommandLine.arguments.firstIndex(of: "--iconset"), i + 1 < CommandLine.arguments.count {
-    let dir = CommandLine.arguments[i + 1]
+    let dir = outputDirectory(CommandLine.arguments[i + 1])
     for size in [16, 32, 128, 256, 512] {
         renderIcon(pixels: size, to: "\(dir)/icon_\(size)x\(size).png")
         renderIcon(pixels: size * 2, to: "\(dir)/icon_\(size)x\(size)@2x.png")
@@ -20,7 +27,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--iconset"), i + 1 < CommandLin
 
 // OctopusMenuBar --chartdemo DIR : render the usage chart to PNGs to check the layout.
 if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandLine.arguments.count {
-    let dir = CommandLine.arguments[i + 1]
+    let dir = outputDirectory(CommandLine.arguments[i + 1])
     MainActor.assumeIsolated {
         let series = sampleUsageWeek(tz: .current)
         for (name, unit, scale, dark, hover) in [

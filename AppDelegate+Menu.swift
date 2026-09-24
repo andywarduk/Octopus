@@ -22,6 +22,11 @@ extension AppDelegate {
             symbol = "exclamationmark.triangle"
             tip = lastError ?? "Loading…"
         }
+        // Every 30 seconds this is usually the same answer as last time; rebuilding the symbol image
+        // and resetting the button would redraw the menu bar item for nothing.
+        let state = "\(symbol)|\(color == nil ? "" : "green")|\(tip)"
+        guard state != shownIcon else { return }
+        shownIcon = state
         var image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
         if let color {
             image = image?.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))

@@ -365,15 +365,10 @@ final class UsageChartView: NSView {
 
     /// Day names under daily columns; under half-hourly bars, one name per day plus a boundary tick.
     private func drawTimeAxis(plot: CGRect, slot: CGFloat) {
-        let dayFormat = DateFormatter()
-        dayFormat.locale = Locale(identifier: "en_GB")
-        dayFormat.timeZone = tz
-        dayFormat.dateFormat = "EEE"
-
         if granularity == .day {
             for (index, period) in periods.enumerated() {
                 label(
-                    dayFormat.string(from: period.start),
+                    formatted(period.start, "EEE", tz),
                     at: CGPoint(x: plot.minX + slot * (CGFloat(index) + 0.5), y: plot.minY - 20), size: 10,
                     color: .secondaryLabelColor, align: .centre)
             }
@@ -390,7 +385,7 @@ final class UsageChartView: NSView {
             let to = plot.minX + slot * CGFloat(index)
             if to - from > 26 {
                 label(
-                    dayFormat.string(from: periods[runStart].start),
+                    formatted(periods[runStart].start, "EEE", tz),
                     at: CGPoint(x: (from + to) / 2, y: plot.minY - 20), size: 10,
                     color: .secondaryLabelColor, align: .centre)
             }
