@@ -13,6 +13,20 @@ There are also four command-line scripts covering the same ground, for the termi
 > with anything that matters. `AGENTS.md` records what the API actually does and why the code is
 > shaped the way it is.
 
+## Screenshots
+
+<p>
+  <img src="images/electricity-use.png" alt="Electricity Use window, light mode, showing a week of stacked columns with a tooltip open on Wednesday" width="420">
+  <img src="images/electricity-use-dark.png" alt="Electricity Use window, dark mode, priced in pounds" width="420">
+</p>
+<p>
+  <img src="images/carbon-intensity.png" alt="Carbon Intensity window with a tooltip showing the generation mix for a half hour" width="600">
+</p>
+
+These are rendered by the app's own `--chartdemo` flag against fixed sample data (see
+[Contributing](#contributing)), so they match what the real windows draw without needing a live
+Octopus account.
+
 ## Menu bar app
 
 Requires macOS 13 or later and Xcode's command line tools.
