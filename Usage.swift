@@ -47,6 +47,8 @@ struct UsagePeriod {
     var standingPence: Double = 0
     /// Some of this period was billed against an EV device bucket, i.e. a smart charge ran.
     var smartCharge = false
+    /// Starts of the half hours billed to a smart-charge bucket, so a day's tooltip can say when.
+    var smartSlots: [Date] = []
     /// The API returned something for this period. False means not published yet, which is not
     /// the same as having used nothing — Octopus runs roughly two days behind.
     var hasData = false
@@ -162,7 +164,10 @@ func aggregateUsage(
         let slot = band(for: bucket, threshold: threshold)
         entry.kwh[slot, default: 0] += bucket.kwh
         entry.pence[slot, default: 0] += bucket.pence
-        if isSmartChargeBucket(bucket.label) { entry.smartCharge = true }
+        if isSmartChargeBucket(bucket.label) {
+            entry.smartCharge = true
+            if !entry.smartSlots.contains(bucket.start) { entry.smartSlots.append(bucket.start) }
+        }
         entry.hasData = true
         periods[start] = entry
     }
@@ -174,6 +179,41 @@ func aggregateUsage(
         periods[start] = entry
     }
     return periods.values.sorted { $0.start < $1.start }
+}
+
+/// Smart-charge half hours joined into runs wherever one follows straight on from the last.
+func smartChargeRuns(_ slots: [Date]) -> [(start: Date, end: Date)] {
+    var runs: [(start: Date, end: Date)] = []
+    for slot in slots.sorted() {
+        let end = slot.addingTimeInterval(1800)
+        if let last = runs.last, last.end == slot {
+            runs[runs.count - 1].end = end
+        } else {
+            runs.append((slot, end))
+        }
+    }
+    return runs
+}
+
+/// The tooltip's wording for when a period's smart charges ran. A day lists its runs, more than four
+/// summarised rather than listed; a half hour gives the whole run it belongs to, found among
+/// `periods` — the chart's other half hours — so a charge across midnight reads as one range.
+func smartChargeText(
+    _ period: UsagePeriod, granularity: Granularity, tz: TimeZone, periods: [UsagePeriod] = []
+) -> String? {
+    guard period.smartCharge else { return nil }
+    guard granularity == .day else {
+        let slots = periods.filter(\.smartCharge).map(\.start)
+        let run = smartChargeRuns(slots.contains(period.start) ? slots : [period.start])
+            .first { $0.start <= period.start && period.start < $0.end }
+        guard let run else { return "Smart charge ran in this half hour" }
+        return "Smart charge \(formatted(run.start, "HH:mm", tz))–\(formatted(run.end, "HH:mm", tz))"
+    }
+    let runs = smartChargeRuns(period.smartSlots)
+    guard !runs.isEmpty else { return "Smart charge ran in this period" }
+    let shown = runs.prefix(4).map { "\(formatted($0.start, "HH:mm", tz))–\(formatted($0.end, "HH:mm", tz))" }
+    let more = runs.count > shown.count ? ", +\(runs.count - shown.count) more" : ""
+    return "Smart charge \(shown.joined(separator: ", "))\(more)"
 }
 
 /// A fetched week, with enough context to know when it is worth keeping.

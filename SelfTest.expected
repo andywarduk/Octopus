@@ -136,6 +136,17 @@
     half-hourly, 2 of 48 published: complete=false
     half-hourly, all 48 published: complete=true
     daily meter, day published: complete=true
+  smart charge times:
+    Sat 19: Smart charge 00:00–03:30, 23:30–00:00
+    Sun 20: Smart charge 00:00–02:00, 13:00–14:30, 23:30–00:00
+    Mon 21: Smart charge 00:00–04:30, 23:30–00:00
+    Tue 22: Smart charge 00:00–02:30, 23:30–00:00
+    Wed 23: Smart charge 00:00–05:00, 13:00–14:30, 23:30–00:00
+    Thu 24: Smart charge 00:00–01:00
+    half hour Wed 13:30: Smart charge 13:00–14:30
+    half hour Wed 00:00: Smart charge 23:30–05:00
+    half hour Wed 03:00: Smart charge 23:30–05:00
+    six separate half hours: Smart charge 01:00–01:30, 04:00–04:30, 07:00–07:30, 10:00–10:30, +2 more
   cache freshness:
     settled week, fetched months ago: true
     complete week, fetched 3 days after it ended, months ago: false

@@ -484,8 +484,8 @@ final class UsageChartView: NSView {
                 "\(RateBand.standing.rawValue): \(formatUsage(standing, .money, withUnit: true))",
                 SeriesColor.of(.standing, dark: isDark)))
         }
-        if period.smartCharge {
-            lines.append(TooltipLine("Smart charge ran in this period", SeriesColor.smart(dark: isDark)))
+        if let smart = smartChargeText(period, granularity: granularity, tz: tz, periods: periods) {
+            lines.append(TooltipLine(smart, SeriesColor.smart(dark: isDark)))
         }
         if period.hasData, period.total(unit, bands) == 0 { lines.append(TooltipLine("No usage")) }
 

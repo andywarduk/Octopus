@@ -625,6 +625,26 @@ func selfTest() {
         print("    \(label): complete=\(s.isComplete)")
     }
 
+    // The tooltip says when a day's smart charges ran, joining back-to-back half hours.
+    print("  smart charge times:")
+    let sampleWeek = sampleUsageWeek(tz: tzLondon)
+    for period in sampleWeek.periods(.day) {
+        guard let text = smartChargeText(period, granularity: .day, tz: tzLondon) else { continue }
+        print("    \(formatted(period.start, "EEE d", tzLondon)): \(text)")
+    }
+    // A half hour gives the whole run it sits in, across midnight too, not just itself.
+    let halfHours = sampleWeek.periods(.halfHour)
+    for start in ["2026-09-23T12:30:00Z", "2026-09-22T23:00:00Z", "2026-09-23T02:00:00Z"] {
+        guard let halfHour = halfHours.first(where: { $0.start == date(start) }) else { continue }
+        print("    half hour \(formatted(halfHour.start, "EEE HH:mm", tzLondon)): "
+            + (smartChargeText(halfHour, granularity: .halfHour, tz: tzLondon, periods: halfHours) ?? "no smart charge"))
+    }
+    let scattered = (0..<6).map { date("2026-09-20T00:00:00Z").addingTimeInterval(Double($0) * 3 * 3600) }
+    let scatteredDay = UsagePeriod(
+        start: date("2026-09-19T23:00:00Z"), end: date("2026-09-20T23:00:00Z"), smartCharge: true,
+        smartSlots: scattered)
+    print("    six separate half hours: \(smartChargeText(scatteredDay, granularity: .day, tz: tzLondon) ?? "none")")
+
     print("  cache freshness:")
     // A week that ended long before it was fetched can't change; one fetched soon after it ended
     // still can, since Octopus corrects costs after publishing them.

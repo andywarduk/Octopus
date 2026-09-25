@@ -183,7 +183,8 @@ only the outward part of it is sent.
 
 Meters are matched to the property they actually sit at, and only those with an active agreement
 are offered. Every meter's tariff opens its own usage window, titled with the address. If you have more than one electricity meter, **Settings** chooses which one
-drives the menu bar rate and the carbon intensity postcode.
+drives the menu bar rate, the rate-change alerts and the carbon intensity postcode. Smart-charge
+and tariff-end alerts cover the whole account whichever you pick.
 
 ### Command-line scripts
 

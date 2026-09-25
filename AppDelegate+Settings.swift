@@ -38,11 +38,12 @@ extension AppDelegate {
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
 
-        // One choice left: which electricity meter the menu bar and carbon intensity follow. Usage
-        // windows are per meter and open from the menu, so gas no longer needs choosing at all.
+        // One choice left: which electricity meter the menu bar, the rate-change alerts and carbon
+        // intensity follow. Smart-charge and tariff-end alerts are account-wide, so they don't.
+        // Usage windows are per meter and open from the menu, so gas no longer needs choosing.
         let meterHeading = NSTextField(labelWithString: "Meter")
         meterHeading.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        let caption = NSTextField(labelWithString: "Menu bar and carbon intensity follow:")
+        let caption = NSTextField(labelWithString: "Menu bar, rate alerts and carbon intensity follow:")
         caption.font = .systemFont(ofSize: 11)
         caption.textColor = .secondaryLabelColor
         let picker = NSPopUpButton()
@@ -136,7 +137,7 @@ extension AppDelegate {
         let index = sender.indexOfSelectedItem
         guard index >= 0, index < electricity.count else { return }
         MeterPreference.save(electricity[index])
-        // The menu bar rate follows this meter, and carbon intensity its postcode.
+        // The menu bar rate and its alerts follow this meter, and carbon intensity its postcode.
         invalidateSnapshot()
         carbonController.resetForMeterChange()
         refresh(manual: true)
