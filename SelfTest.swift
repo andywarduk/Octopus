@@ -633,11 +633,11 @@ func selfTest() {
         print("    \(formatted(period.start, "EEE d", tzLondon)): \(text)")
     }
     // A half hour gives the whole run it sits in, across midnight too, not just itself.
-    let halfHours = sampleWeek.periods(.halfHour)
+    let weekHalfHours = sampleWeek.periods(.halfHour)
     for start in ["2026-09-23T12:30:00Z", "2026-09-22T23:00:00Z", "2026-09-23T02:00:00Z"] {
-        guard let halfHour = halfHours.first(where: { $0.start == date(start) }) else { continue }
+        guard let halfHour = weekHalfHours.first(where: { $0.start == date(start) }) else { continue }
         print("    half hour \(formatted(halfHour.start, "EEE HH:mm", tzLondon)): "
-            + (smartChargeText(halfHour, granularity: .halfHour, tz: tzLondon, periods: halfHours) ?? "no smart charge"))
+            + (smartChargeText(halfHour, granularity: .halfHour, tz: tzLondon, periods: weekHalfHours) ?? "no smart charge"))
     }
     let scattered = (0..<6).map { date("2026-09-20T00:00:00Z").addingTimeInterval(Double($0) * 3 * 3600) }
     let scatteredDay = UsagePeriod(
