@@ -384,9 +384,11 @@ against real data. Treat those paths as unverified.
 - **Tooltip rows carry the swatch of the mark they describe**, drawn by the shared
   `drawTooltipBox` in `UsageChart.swift` — both charts use it, and it also owns the
   beside-not-over placement. The gutter is reserved for every row as soon as any row has a
-  swatch, so the text stays in one column instead of stepping in and out. The carbon chart drops
-  the index swatch in fuel-mix mode, where the bars are no longer coloured by band; the fuel
-  swatches stay in both views, since those colours are that fuel's identity throughout the window.
+  swatch, so the text stays in one column instead of stepping in and out. The carbon chart keeps
+  the intensity band's swatch in both views: in fuel-mix mode no bar is drawn in that colour, but
+  it names the band the same way it does in the intensity view. It used to be dropped there. The
+  fuel swatches also appear in both views, since those colours are that fuel's identity
+  throughout the window, and both views list every fuel.
 - **The fuel-mix bar height is GB demand, and that forces the mix's geography.** Demand comes from
   Elexon (`data.elexon.co.uk/bmrs/api/v1`, keyless): `/demand/outturn` gives `initialDemandOutturn`
   for settled half hours, `/forecast/demand/day-ahead` gives `nationalDemand` ahead of now. Both
@@ -463,6 +465,10 @@ against real data. Treat those paths as unverified.
 - **Axis steps are chosen before the maximum.** Picking the maximum and quartering it gives ticks
   like 1.25 / 2.5 / 3.75. `axisScale` picks a round step from 1, 2, 2.5, 5 × a power of ten and
   takes the finest needing six lines or fewer.
+- **Half-hourly bars always meet**, in both charts and at any width, and have square tops. Both
+  charts used to open a 2pt gap once bars were wide enough (6pt usage, 14pt carbon), which striped
+  the stack and read as a cap on how wide a bar could get; rounded tops on meeting bars would
+  notch the strip. Daily columns still sit apart, capped at 46pt, with rounded tops.
 - **Half-hourly bars snap both edges to the device pixel grid**, via `snapToPixel`. Rounding only
   the origin leaves a sub-pixel sliver that renders as a hairline between bars — 396 of them
   before this was fixed. Snapping to whole *points* fixes the hairlines but makes bars alternate

@@ -37,6 +37,15 @@ enum SeriesColor {
 /// Picks a round gridline step first, then the axis maximum as a whole number of those steps.
 /// Choosing the maximum first and quartering it gives ticks like 1.25 / 2.5 / 3.75.
 /// Steps ascend, so the first one needing six lines or fewer is the finest that stays readable.
+/// Laid over a hovered bar's own shapes, so the bar itself is marked. Chosen per fill: a dark fill
+/// is lightened and a light one darkened, since darkening a near-black band — the carbon chart's
+/// "very high" — changes nothing you can see. The bar's colour still reads through it.
+func hoverTint(over fill: NSColor) -> NSColor {
+    let rgb = fill.usingColorSpace(.sRGB) ?? fill
+    let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+    return (luminance < 0.35 ? NSColor.white : NSColor.black).withAlphaComponent(0.25)
+}
+
 func axisScale(_ maxValue: Double) -> (max: Double, step: Double) {
     guard maxValue > 0, maxValue.isFinite else { return (1, 1) }
     for power in -4...12 {
@@ -157,6 +166,7 @@ final class UsageChartView: NSView {
     private var isDark: Bool {
         effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
+
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -287,40 +297,43 @@ final class UsageChartView: NSView {
 
     private func drawColumns(plot: CGRect, axisMax: Double) {
         let slot = slotWidth
-        // Daily columns sit apart; half-hourly bars are a contiguous strip, where a gap would
-        // cost more width than it buys in separation.
-        let barGap: CGFloat = granularity == .day || slot < 6 ? 0 : 2
-        let nominalWidth = granularity == .day ? min(46, slot * 0.66) : slot - barGap
+        // Daily columns sit apart; half-hourly bars always meet, as one strip at any width. A gap
+        // once they grew wide read as a cap on how wide a bar could get.
+        let nominalWidth = granularity == .day ? min(46, slot * 0.66) : slot
         let segmentGap: CGFloat = nominalWidth >= 6 ? 2 : 0
         let showCaps = granularity == .day
 
+        func column(_ index: Int) -> (left: CGFloat, width: CGFloat) {
+            if granularity == .day {
+                let centre = plot.minX + slot * (CGFloat(index) + 0.5)
+                return (centre - nominalWidth / 2, nominalWidth)
+            }
+            // Snap both edges to the pixel grid. Rounding only the origin leaves a sub-pixel
+            // sliver of background between neighbours, which draws as a hairline.
+            let edge = snapToPixel(plot.minX + slot * CGFloat(index))
+            let nextEdge = snapToPixel(plot.minX + slot * CGFloat(index + 1))
+            return (edge, max(1, nextEdge - edge))
+        }
+
+        // The hover highlight goes down before any bar, so both neighbours cover its padding.
+        // Drawn inside the loop, the bar to the left was already painted and the padding tinted
+        // its edge — a faint line on the left of the highlighted bar and none on the right.
+        if let hoverIndex, hoverIndex < periods.count {
+            let (left, width) = column(hoverIndex)
+            // Pad by a fraction of the bar, not a fixed amount: 3px either side of a 1.6px
+            // half-hourly bar makes the highlight wider than the thing it marks.
+            let pad = min(3, max(0.5, width / 3))
+            NSColor.secondaryLabelColor.withAlphaComponent(0.09).setFill()
+            NSBezierPath(
+                roundedRect: CGRect(
+                    x: left - pad, y: plot.minY - 3, width: width + pad * 2, height: plot.height + 6),
+                xRadius: min(4, pad * 2), yRadius: min(4, pad * 2)
+            ).fill()
+        }
+
         for (index, period) in periods.enumerated() {
             let centre = plot.minX + slot * (CGFloat(index) + 0.5)
-            let left: CGFloat
-            let width: CGFloat
-            if granularity == .day {
-                width = nominalWidth
-                left = centre - width / 2
-            } else {
-                // Snap both edges to the pixel grid. Rounding only the origin leaves a sub-pixel
-                // sliver of background between neighbours, which draws as a hairline.
-                let edge = snapToPixel(plot.minX + slot * CGFloat(index))
-                let nextEdge = snapToPixel(plot.minX + slot * CGFloat(index + 1))
-                left = edge
-                width = max(1, nextEdge - edge - barGap)
-            }
-
-            if hoverIndex == index {
-                // Pad by a fraction of the bar, not a fixed amount: 3px either side of a 1.6px
-                // half-hourly bar makes the highlight wider than the thing it marks.
-                let pad = min(3, max(0.5, width / 3))
-                NSColor.secondaryLabelColor.withAlphaComponent(0.09).setFill()
-                NSBezierPath(
-                    roundedRect: CGRect(
-                        x: left - pad, y: plot.minY - 3, width: width + pad * 2, height: plot.height + 6),
-                    xRadius: min(4, pad * 2), yRadius: min(4, pad * 2)
-                ).fill()
-            }
+            let (left, width) = column(index)
 
             if !period.hasData {
                 // A dash on the baseline: clearly not a zero-height bar.
@@ -341,9 +354,16 @@ final class UsageChartView: NSView {
                 let rect = CGRect(x: left, y: y, width: width, height: height)
                 SeriesColor.of(band, dark: isDark).setFill()
                 // Only the data end is rounded; everything below stays square on the baseline.
-                let path = isTop && height > 4 && width >= 8
+                // Half-hourly bars meet, so rounding each top would notch the strip between them.
+                let path = granularity == .day && isTop && height > 4 && width >= 8
                     ? roundedTop(rect, radius: 4) : NSBezierPath(rect: rect)
                 path.fill()
+                if hoverIndex == index {
+                    // The bar itself is marked, not only the space around it: in the half-hourly
+                    // strip the neighbours hide the background highlight almost entirely.
+                    hoverTint(over: SeriesColor.of(band, dark: isDark)).setFill()
+                    path.fill()
+                }
                 y += full
             }
 
@@ -431,14 +451,18 @@ final class UsageChartView: NSView {
 
     private func drawTooltip(for index: Int, plot: CGRect) {
         let period = periods[index]
-        let heading: String
-        if granularity == .day {
-            heading = period.hasData
-                ? "\(formatted(period.start, "EEE d MMM", tz))  ·  \(formatUsage(period.total(unit, bands), unit, withUnit: true, energyLabel: energyLabel))"
-                : formatted(period.start, "EEE d MMM", tz)
-        } else {
-            heading = "\(formatted(period.start, "EEE d MMM HH:mm", tz))–\(formatted(period.end, "HH:mm", tz))"
-                + "  ·  \(formatUsage(period.total(unit, bands), unit, withUnit: true, energyLabel: energyLabel))"
+        var heading = granularity == .day
+            ? formatted(period.start, "EEE d MMM", tz)
+            : "\(formatted(period.start, "EEE d MMM HH:mm", tz))–\(formatted(period.end, "HH:mm", tz))"
+        if period.hasData || granularity == .halfHour {
+            heading += "  ·  \(formatUsage(period.total(unit, bands), unit, withUnit: true, energyLabel: energyLabel))"
+        }
+        // The kWh view carries the cost too. It is the whole cost, standing charge included, so it
+        // matches the same period's total in the £ view; the standing charge gets its own line
+        // below so the band costs still add up to it.
+        let standing = period.value(.standing, .money)
+        if unit == .kwh, period.hasData {
+            heading += "  ·  \(formatUsage(period.total(.money), .money, withUnit: true))"
         }
         var lines = [TooltipLine(heading)]
         if !period.hasData {
@@ -446,8 +470,19 @@ final class UsageChartView: NSView {
         }
         for band in bands where period.value(band, unit) > 0 {
             var text = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true, energyLabel: energyLabel))"
-            if let price = period.price(band) { text += String(format: " @ %.2fp", price) }
+            // The rate explains a kWh figure; beside a money figure it is arithmetic the reader
+            // didn't ask for, so the £ view shows only what the band cost.
+            if unit == .kwh, let price = period.price(band) {
+                // What it came to as well: the billed amount, which the rate was derived from.
+                text += String(format: " @ %.2fp", price)
+                    + " = \(formatUsage(period.value(band, .money), .money, withUnit: true))"
+            }
             lines.append(TooltipLine(text, SeriesColor.of(band, dark: isDark)))
+        }
+        if unit == .kwh, standing > 0 {
+            lines.append(TooltipLine(
+                "\(RateBand.standing.rawValue): \(formatUsage(standing, .money, withUnit: true))",
+                SeriesColor.of(.standing, dark: isDark)))
         }
         if period.smartCharge {
             lines.append(TooltipLine("Smart charge ran in this period", SeriesColor.smart(dark: isDark)))

@@ -254,29 +254,40 @@ final class CarbonChartView: NSView {
     }
 
     private func drawColumns(plot: CGRect, axisMax: Double) {
-        // A half-hourly strip reads as one shape, so it stays contiguous until the bars are wide
-        // enough that a 2pt gap is a small fraction of one. At 96 slots a gap stripes the stack.
-        let barGap: CGFloat = slotWidth < 14 ? 0 : 2
-        for (index, reading) in readings.enumerated() {
+        // Half-hourly bars always meet: the strip reads as one shape at any width. A gap once the
+        // bars grew wide enough striped the stack and read as a cap on how wide a bar could get.
+        func column(_ index: Int) -> (edge: CGFloat, width: CGFloat) {
             let edge = snapToPixel(plot.minX + slotWidth * CGFloat(index))
             let nextEdge = snapToPixel(plot.minX + slotWidth * CGFloat(index + 1))
-            let width = max(1, nextEdge - edge - barGap)
+            return (edge, max(1, nextEdge - edge))
+        }
 
-            if hoverIndex == index {
-                let pad = min(3, max(0.5, width / 3))
-                NSColor.secondaryLabelColor.withAlphaComponent(0.09).setFill()
-                NSBezierPath(
-                    roundedRect: CGRect(
-                        x: edge - pad, y: plot.minY - 3, width: width + pad * 2, height: plot.height + 6),
-                    xRadius: min(4, pad * 2), yRadius: min(4, pad * 2)
-                ).fill()
-            }
+        // Before any bar, so both neighbours cover the padding; see the usage chart.
+        if let hoverIndex, hoverIndex < readings.count {
+            let (edge, width) = column(hoverIndex)
+            let pad = min(3, max(0.5, width / 3))
+            NSColor.secondaryLabelColor.withAlphaComponent(0.09).setFill()
+            NSBezierPath(
+                roundedRect: CGRect(
+                    x: edge - pad, y: plot.minY - 3, width: width + pad * 2, height: plot.height + 6),
+                xRadius: min(4, pad * 2), yRadius: min(4, pad * 2)
+            ).fill()
+        }
+
+        for (index, reading) in readings.enumerated() {
+            let (edge, width) = column(index)
 
             switch mode {
             case .intensity:
                 let height = max(1, CGFloat(reading.grams / axisMax) * plot.height)
                 CarbonColor.of(reading.index, dark: isDark).setFill()
-                NSBezierPath(rect: CGRect(x: edge, y: plot.minY, width: width, height: height)).fill()
+                let bar = NSBezierPath(rect: CGRect(x: edge, y: plot.minY, width: width, height: height))
+                bar.fill()
+                if hoverIndex == index {
+                    // The bar itself is marked, as in the usage chart.
+                    hoverTint(over: CarbonColor.of(reading.index, dark: isDark)).setFill()
+                    bar.fill()
+                }
             case .mix:
                 // Normalised to the column's own total rather than trusted to be exactly 100.
                 // The shares are rounded to a decimal place at source, so they can total 100.1 —
@@ -305,8 +316,12 @@ final class CarbonChartView: NSView {
                 for share in reading.mix {
                     let full = CGFloat(share.percent / total) * barHeight
                     FuelColor.of(share.fuel, dark: isDark).setFill()
-                    NSBezierPath(rect: CGRect(x: edge, y: y, width: width, height: max(0.5, full)))
-                        .fill()
+                    let segment = NSBezierPath(rect: CGRect(x: edge, y: y, width: width, height: max(0.5, full)))
+                    segment.fill()
+                    if hoverIndex == index {
+                        hoverTint(over: FuelColor.of(share.fuel, dark: isDark)).setFill()
+                        segment.fill()
+                    }
                     y += full
                 }
             }
@@ -415,14 +430,19 @@ final class CarbonChartView: NSView {
         var lines = [
             TooltipLine(
                 "\(formatted(reading.start, "EEE d MMM HH:mm", tz))–\(formatted(reading.end, "HH:mm", tz))"),
-            // The band's swatch only means anything against the bars when the bars are coloured
-            // by band, which is the intensity view.
+            // The band's swatch in both views. In the fuel-mix view no bar carries that colour, but
+            // it still names the band at a glance, the same colour it has in the intensity view.
             TooltipLine(
                 "\(formatGrams(reading.grams))  ·  \(reading.index.title)",
-                mode == .intensity ? CarbonColor.of(reading.index, dark: isDark) : nil),
+                CarbonColor.of(reading.index, dark: isDark)),
         ]
         if let demand = reading.demandMW {
-            lines.append(TooltipLine("GB demand \(formatPower(demand))"))
+            // Settled outturn behind now, the day-ahead forecast ahead of it: the same figure means
+            // different things, and a prediction must not read as a measurement.
+            lines.append(TooltipLine(
+                reading.demandIsForecast
+                    ? "GB demand \(formatPower(demand)) (forecast)"
+                    : "GB demand \(formatPower(demand))"))
         } else if mode == .mix, scaledToDemand {
             // Blaming the forecast horizon for the half hour running right now is simply wrong.
             lines.append(
@@ -435,7 +455,9 @@ final class CarbonChartView: NSView {
         // first here, unlike the stack — reading a tooltip, the biggest contributor is the point.
         let ranked = reading.mix.sorted { $0.percent > $1.percent }
         let total = reading.mix.reduce(0) { $0 + $1.percent }
-        for share in ranked.prefix(mode == .mix ? 9 : 4) {
+        // Every fuel in both views: the intensity view used to stop at four, which hid what made up
+        // the rest of the number.
+        for share in ranked {
             var text = String(format: "%@ %.1f%%", share.fuel.title, share.percent)
             // Megawatts per fuel only where the split is the national one. Against a regional
             // share it would be a number that does not exist.
@@ -525,6 +547,8 @@ func sampleCarbonForecast(from start: Date) -> [CarbonReading] {
             // the day-ahead forecast; past slot 80 is the far end of the forecast horizon. Both
             // gaps are real shapes the live data takes, so the demo renders both.
             demandMW: (slot == 6 || slot >= 80) ? nil : demand.rounded(),
+            // Slot 6 is now: everything after it is the day-ahead forecast.
+            demandIsForecast: slot > 6,
             mixIsNational: slot < 48)
         return reading
     }

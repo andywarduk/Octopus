@@ -107,6 +107,9 @@ struct CarbonReading: Equatable {
     /// GB demand for this half hour in MW: settled outturn in the past, day-ahead forecast in the
     /// near future, and nil beyond where the forecast reaches.
     var demandMW: Double?
+    /// True when `demandMW` is the day-ahead forecast rather than settled outturn — a prediction,
+    /// and said to be one wherever it is shown.
+    var demandIsForecast = false
     /// Whether `mix` is the national split or the region's. Only the national one can be
     /// multiplied by GB demand to give real megawatts per fuel; the regional one is a proportion
     /// at national scale, which is a weaker claim and has to be labelled as such.
@@ -390,7 +393,8 @@ private func fetchNationalGridCarbon(
         readings = readings.map { reading in
             var updated = reading
             let key = Int(reading.start.timeIntervalSince1970 / 1800)
-            updated.demandMW = demandBySlot[key]
+            updated.demandMW = demandBySlot[key]?.mw
+            updated.demandIsForecast = demandBySlot[key]?.forecast ?? false
             // The national split is the only one that can be multiplied by GB demand to mean
             // megawatts. Where it hasn't been published the regional forecast stands in, and
             // the flag records which so the chart can say so.
@@ -434,7 +438,7 @@ private func settlementRef(_ date: Date) -> (date: String, period: Int) {
 /// GB demand in MW per half hour: settled outturn for the past, day-ahead forecast for the near
 /// future. Both are asked for every time — a window can straddle now, and neither covers the
 /// other's half.
-func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
+func fetchGBDemand(from: Date, to: Date) async -> [Int: (mw: Double, forecast: Bool)] {
     let iso = DateFormatter()
     iso.locale = Locale(identifier: "en_US_POSIX")
     iso.timeZone = TimeZone(identifier: "UTC")
@@ -445,19 +449,19 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     day.dateFormat = "yyyy-MM-dd"
 
     let base = "https://data.elexon.co.uk/bmrs/api/v1"
-    var demand: [Int: Double] = [:]
+    var demand: [Int: (mw: Double, forecast: Bool)] = [:]
 
     /// Takes a response's rows, keeping the first value seen for each slot. Everything here is
     /// loaded newest-first, so the first value is the freshest.
     @discardableResult
-    func absorb(_ body: [String: Any], field: String) -> Int {
+    func absorb(_ body: [String: Any], field: String, forecast: Bool) -> Int {
         var added = 0
         for row in body["data"] as? [[String: Any]] ?? [] {
             guard let start = parseCarbonDate(row["startTime"]), let value = toDouble(row[field])
             else { continue }
             let key = slotKey(start)
             if demand[key] == nil {
-                demand[key] = value
+                demand[key] = (value, forecast)
                 added += 1
             }
         }
@@ -476,7 +480,7 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
         "\(base)/demand/outturn?settlementDateFrom=\(day.string(from: from))"
             + "&settlementDateTo=\(day.string(from: to))&format=json")
     {
-        absorb(body, field: "initialDemandOutturn")
+        absorb(body, field: "initialDemandOutturn", forecast: false)
     }
 
     let now = Date()
@@ -503,7 +507,7 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     if let body = await fetch("\(base)/forecast/demand/day-ahead/history"
         + "?publishTime=\(iso.string(from: now))&format=json")
     {
-        absorb(body, field: "nationalDemand")
+        absorb(body, field: "nationalDemand", forecast: true)
     }
 
     for _ in 0..<2 {
@@ -517,7 +521,7 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
             let newest = rows.compactMap({ parseCarbonDate($0["publishTime"]) }).max(),
             let block = await fetch("\(base)/forecast/demand/day-ahead/history"
                 + "?publishTime=\(iso.string(from: newest))&format=json"),
-            absorb(block, field: "nationalDemand") > 0
+            absorb(block, field: "nationalDemand", forecast: true) > 0
         else { break }
     }
     return demand
