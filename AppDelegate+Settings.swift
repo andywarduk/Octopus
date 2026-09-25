@@ -9,7 +9,7 @@ extension AppDelegate {
         setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
         removeButton?.isEnabled = apiKey != nil
         notifyCheck?.state = notifyEnabled ? .on : .off
-        dispatchCheck_?.state = dispatchAlertEnabled ? .on : .off
+        dispatchCheck?.state = dispatchAlertEnabled ? .on : .off
         tariffCheck?.state = tariffAlertEnabled ? .on : .off
         // Read from macOS rather than from a stored preference: the user can turn this off
         // in System Settings, and the checkbox must reflect what is actually true.
@@ -63,7 +63,7 @@ extension AppDelegate {
         let check = NSButton(
             checkboxWithTitle: "Alert 10 minutes before the rate changes", target: self,
             action: #selector(toggleNotify(_:)))
-        let dispatchCheck = NSButton(
+        let dispatchChangeCheck = NSButton(
             checkboxWithTitle: "Alert when the smart-charge plan changes", target: self,
             action: #selector(toggleDispatchNotify(_:)))
         let tariffEndCheck = NSButton(
@@ -77,7 +77,7 @@ extension AppDelegate {
 
         let stack = NSStackView(
             views: [heading, keyRow, status] + meterRows
-                + [check, dispatchCheck, tariffEndCheck, loginItemCheck, test])
+                + [check, dispatchChangeCheck, tariffEndCheck, loginItemCheck, test])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -109,7 +109,7 @@ extension AppDelegate {
         keyField = field
         keyStatus = status
         notifyCheck = check
-        dispatchCheck_ = dispatchCheck
+        dispatchCheck = dispatchChangeCheck
         tariffCheck = tariffEndCheck
         loginCheck = loginItemCheck
         removeButton = remove

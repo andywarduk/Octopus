@@ -285,10 +285,7 @@ func outwardCode(_ postcode: String) -> String {
 
 // MARK: - Fetching
 
-/// The same fetch, reachable from the demand and national-mix helpers below.
-func getJSONPublic(_ url: URL) async throws -> [String: Any] { try await getJSON(url) }
-
-private func getJSON(_ url: URL) async throws -> [String: Any] {
+func getJSON(_ url: URL) async throws -> [String: Any] {
     var request = URLRequest(url: url, timeoutInterval: 30)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     let (data, response) = try await URLSession.shared.data(for: request)
@@ -520,7 +517,7 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: Double] {
     /// failing the whole window — so nothing here throws.
     func fetch(_ endpoint: String) async -> [String: Any]? {
         guard let url = URL(string: endpoint) else { return nil }
-        return try? await getJSONPublic(url)
+        return try? await getJSON(url)
     }
 
     // Settled demand first: it is measurement, and a forecast must never overwrite it.
@@ -587,7 +584,7 @@ func fetchNationalMix(from: Date, to: Date) async -> [Int: [FuelShare]] {
         let url = URL(
             string: "https://api.carbonintensity.org.uk/generation/"
                 + "\(iso.string(from: from))/\(iso.string(from: to))"),
-        let body = try? await getJSONPublic(url)
+        let body = try? await getJSON(url)
     else { return [:] }
 
     var mixes: [Int: [FuelShare]] = [:]

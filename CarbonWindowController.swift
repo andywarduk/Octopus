@@ -32,6 +32,10 @@ final class CarbonWindowController: NSObject {
     /// old one is neither shown nor cached.
     private var generation = 0
 
+    /// Moves the "now" rule and the footer's current reading along while the window stays open.
+    /// They were set once per load, so a window left up all afternoon still marked the morning.
+    private var clock: Timer?
+
     /// The chart's timezone throughout: both sources are British and report in UTC.
     private let tz = TimeZone(identifier: "Europe/London") ?? .current
 
@@ -45,6 +49,30 @@ final class CarbonWindowController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         if series.isEmpty { load() }
+        startClock()
+    }
+
+    /// A minute is plenty: the rule moves about a pixel a minute across 48 hours of chart. It only
+    /// runs while the window is up, and stops itself once the window is closed.
+    private func startClock() {
+        guard clock == nil else { return }
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickClock() }
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        clock = timer
+    }
+
+    private func tickClock() {
+        guard window?.isVisible == true else {
+            clock?.invalidate()
+            clock = nil
+            return
+        }
+        guard !series.isEmpty else { return }
+        chart?.now = Date()
+        updateFooter()
     }
 
     /// The meter choice drives which postcode is used, so a change invalidates everything.

@@ -228,20 +228,50 @@ if len(imports) > 1:
 agreement = imports[0]
 mpan = agreement["meterPoint"]["mpan"]
 
+# Devices first: the charge plan below is keyed by device, so their ids are needed to ask for it.
+# A failure here is reported with the cars, and never hides the rate result.
+DEVICES_QUERY = """query($a:String!){devices(accountNumber:$a){
+  __typename id name
+  ... on SmartFlexVehicle{
+    make model vehicleBatterySize
+    status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
+    preferences{unit schedules{dayOfWeek time max upperLimit}}
+  }
+  ... on SmartFlexChargePoint{
+    status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
+  }
+}}"""
+device_error = None
+try:
+    devices = gql(DEVICES_QUERY, {"a": account}, token)["devices"] or []
+except RuntimeError as exc:
+    devices, device_error = [], exc
+device_ids = [
+    d["id"] for d in devices
+    if d.get("id") and d.get("__typename") in ("SmartFlexVehicle", "SmartFlexChargePoint")
+]
+
+
 now = datetime.now(timezone.utc)
 end = now + timedelta(hours=24)
-RATES_QUERY = """query($a:String!,$m:String!,$s:DateTime!,$e:DateTime!,$n:Int!){
-      applicableRates(accountNumber:$a,mpxn:$m,startAt:$s,endAt:$e,first:$n){edges{node{value validFrom validTo}}}
-      plannedDispatches(accountNumber:$a){start end}
-      completedDispatches(accountNumber:$a){start end}
-    }"""
+# plannedDispatches is deprecated; flexPlannedDispatches replaces it but is per device, so one
+# alias per device keeps the plan to this one request however many there are.
+flex_defs = "".join(f",$d{i}:String!" for i in range(len(device_ids)))
+flex_fields = "".join(
+    f"\n      f{i}: flexPlannedDispatches(deviceId:$d{i}){{start end type energyAddedKwh}}"
+    for i in range(len(device_ids)))
+RATES_QUERY = f"""query($a:String!,$m:String!,$s:DateTime!,$e:DateTime!,$n:Int!{flex_defs}){{
+      applicableRates(accountNumber:$a,mpxn:$m,startAt:$s,endAt:$e,first:$n){{edges{{node{{value validFrom validTo}}}}}}
+      completedDispatches(accountNumber:$a){{start end}}{flex_fields}
+    }}"""
 
 data = None
 for page_size in (100, 50, 25, 10):
     try:
         data = gql(
             RATES_QUERY,
-            {"a": account, "m": mpan, "s": now.isoformat(), "e": end.isoformat(), "n": page_size},
+            {"a": account, "m": mpan, "s": now.isoformat(), "e": end.isoformat(), "n": page_size,
+             **{f"d{i}": device_id for i, device_id in enumerate(device_ids)}},
             token,
         )
         break
@@ -286,7 +316,8 @@ source = "tariff schedule"
 if not windows:
     windows, source = [FALLBACK_WINDOW], "default 23:30-05:30 window"
 
-dispatches = (data["plannedDispatches"] or []) + (data["completedDispatches"] or [])
+planned = [d for i in range(len(device_ids)) for d in (data.get(f"f{i}") or [])]
+dispatches = planned + (data["completedDispatches"] or [])
 if DEBUG:
     # Whichever source the rates came from; `values` only exists on the fallback path.
     print("rates:", tariff_rates or values)
@@ -319,24 +350,8 @@ else:
         change = min([change, *starts])
         print(f"Next change {stamp(change, now_local)} -> {cheap_rate:.2f}p/kWh")
 
-# Car charge level. Kept separate so a failure here never hides the rate result above.
-DEVICES_QUERY = """query($a:String!){devices(accountNumber:$a){
-  __typename id name
-  ... on SmartFlexVehicle{
-    make model vehicleBatterySize
-    status{... on SmartFlexVehicleStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
-    preferences{unit schedules{dayOfWeek time max upperLimit}}
-  }
-  ... on SmartFlexChargePoint{
-    status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
-  }
-}}"""
-try:
-    devices = gql(DEVICES_QUERY, {"a": account}, token)["devices"] or []
-except RuntimeError as exc:
-    devices = []
-    print(f"Car: unavailable ({exc})")
-
+if device_error:
+    print(f"Car: unavailable ({device_error})")
 if DEBUG:
     print("devices:", json.dumps(devices))
 

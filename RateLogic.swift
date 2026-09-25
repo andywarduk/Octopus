@@ -105,7 +105,9 @@ func carryForwardDevices(_ fetched: Snapshot, from previous: Snapshot?, now: Dat
     guard !fetched.devicesKnown, let previous else { return fetched }
     var merged = fetched
     merged.cars = previous.cars
-    // Only the plan still to come: the fetch already carries the completed slots.
+    // Only the plan still to come. Completed slots arrive in the same request as the devices, so
+    // a failed one lost them too — but once ended they no longer affect any cheap window, and a
+    // slot still running is in the plan still to come.
     merged.dispatches += futureDispatches(previous, now: now)
     merged.devicesKnown = previous.devicesKnown
     return merged

@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var keyField: NSSecureTextField?
     var keyStatus: NSTextField?
     var notifyCheck: NSButton?
-    var dispatchCheck_: NSButton?
+    var dispatchCheck: NSButton?
     var tariffCheck: NSButton?
     var loginCheck: NSButton?
     var removeButton: NSButton?
