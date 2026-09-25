@@ -165,6 +165,8 @@ extension AppDelegate {
             else { return }
             meterChoices = found
             refreshMeterPicker()
+            // The postcode for the icon's carbon forecast has only just become known.
+            refreshCarbonIfDue(now: Date())
         }
     }
 

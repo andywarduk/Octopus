@@ -199,6 +199,36 @@ func fetchInterval(_ recent: [Interval], now: Date) -> TimeInterval {
     return nearSwitch ? 30 : 300
 }
 
+/// Whether a carbon intensity counts as green: at or under Octopus's own 100 gCO₂/kWh line.
+func carbonIsLow(_ grams: Double) -> Bool { grams <= greenThresholdGrams }
+
+/// The status item's symbol. The shape says the carbon intensity — a leaf when it is green, smoke
+/// when it isn't — and filling it (drawn in colour by the caller) says the cheap rate is on. With
+/// carbon unknown it falls back to the bolt, which says the rate alone, as the icon always did.
+func statusSymbol(cheap: Bool, lowCarbon: Bool?) -> String {
+    let base: String
+    switch lowCarbon {
+    case true?: base = "leaf"
+    case false?: base = "smoke"
+    case nil: base = "bolt"
+    }
+    return cheap ? base + ".fill" : base
+}
+
+/// The status item's tooltip: the rate, then the carbon intensity when it is known.
+func statusTip(_ s: Snapshot, cheap: Bool, carbon: CarbonReading?) -> String {
+    var tip: String
+    if !s.hasCheapRate {
+        tip = "Single rate: \(pence(s.peakRate))"
+    } else {
+        tip = cheap ? "Cheap rate: \(pence(s.cheapRate))" : "Standard rate: \(pence(s.peakRate))"
+    }
+    if let carbon {
+        tip += " · \(carbonIsLow(carbon.grams) ? "low" : "high") carbon, \(formatGrams(carbon.grams))"
+    }
+    return tip
+}
+
 /// DateFormatter is costly to build and a menu rebuild formats a dozen dates, so keep one per
 /// format and timezone. Formatting itself is thread-safe; the lock only guards the dictionary.
 private final class FormatterCache: @unchecked Sendable {
@@ -337,7 +367,8 @@ func chargingStatus(_ car: Car, now: Date) -> String? {
     }
 }
 
-func menuLines(_ s: Snapshot, now: Date) -> [Line] {
+/// - Parameter carbon: the regional carbon intensity forecast, when it has loaded.
+func menuLines(_ s: Snapshot, now: Date, carbon: [CarbonReading] = []) -> [Line] {
     let tz = s.tz
     let cal = calendar(tz)
     let intervals = cheapIntervals(s, now: now)
@@ -375,6 +406,9 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
         }
     }
 
+    // Next to the rates, since both answer "is now a good time to use power?".
+    lines += carbonLines(carbon, now: now, tz: tz)
+
     lines.append(.separator)
     lines.append(.header(s.cars.count == 1 ? "Car" : "Cars"))
     if let planned = plannedChargeLine(s, now: now) { lines.append(.text(planned)) }
@@ -408,6 +442,47 @@ func menuLines(_ s: Snapshot, now: Date) -> [Line] {
 
     lines += accountLines(s, now: now)
     lines += tariffLines(s, now: now)
+    return lines
+}
+
+/// The carbon intensity now, and when it is next green — at or under the 100 gCO₂/kWh line the
+/// icon's leaf uses. Absent until the forecast has loaded, rather than a heading with nothing under it.
+///
+/// Deliberately no "cleanest half hour": these readings are the icon's single keyless request, with
+/// no demand to screen the sunrise glitch against, so it could nominate a bogus 5 gCO₂/kWh. The
+/// carbon window, which does screen, is where to look for that.
+func carbonLines(_ readings: [CarbonReading], now: Date, tz: TimeZone) -> [Line] {
+    let ahead = readings.filter { $0.end > now }.sorted { $0.start < $1.start }
+    guard let current = ahead.first(where: { $0.start <= now }) else { return [] }
+    var lines: [Line] = [.separator, .header("Carbon intensity")]
+    lines.append(.text("Now \(formatGrams(current.grams)) · \(current.index.title.lowercased())"))
+
+    // The run of green half hours containing, or next after, now — joined while they are contiguous.
+    func greenRun(from index: Int) -> (start: Date, end: Date) {
+        var end = ahead[index].end
+        var next = index + 1
+        while next < ahead.count, carbonIsLow(ahead[next].grams), ahead[next].start <= end {
+            end = ahead[next].end
+            next += 1
+        }
+        return (ahead[index].start, end)
+    }
+    let horizon = ahead.last?.end ?? now
+    func until(_ end: Date) -> String {
+        // Green to the end of the forecast is not the same as green until then.
+        end >= horizon ? "for as far as the forecast goes" : "until \(stamp(end, now: now, tz))"
+    }
+    if carbonIsLow(current.grams), let index = ahead.firstIndex(of: current) {
+        lines.append(.text("Green (≤100 g) \(until(greenRun(from: index).end))"))
+    } else if let index = ahead.firstIndex(where: { $0.start > now && carbonIsLow($0.grams) }) {
+        let run = greenRun(from: index)
+        let sameDay = calendar(tz).isDate(run.start, inSameDayAs: run.end)
+        let to = sameDay ? formatted(run.end, "HH:mm", tz) : stamp(run.end, now: now, tz)
+        lines.append(.text("Next green (≤100 g): \(stamp(run.start, now: now, tz))–\(to)"))
+    } else {
+        let hours = Int((horizon.timeIntervalSince(now) / 3600).rounded())
+        lines.append(.text("Not green (≤100 g) in the next \(hours) hours"))
+    }
     return lines
 }
 

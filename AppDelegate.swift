@@ -40,6 +40,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var lastAlertedChange: Date?
     /// How far a boundary may move and still count as the same switch.
     static let changeTolerance: TimeInterval = 5 * 60
+    /// The regional carbon intensity forecast behind the icon's leaf or smoke, the postcode it is
+    /// for, and when to ask again. One keyless National Grid request every half hour: nothing
+    /// against the Octopus budget, and the forecast only changes half-hourly anyway.
+    var carbonReadings: [CarbonReading] = []
+    var carbonPostcode: String?
+    var carbonDueAt: Date = .distantPast
+    var carbonLoading = false
+    static let carbonInterval: TimeInterval = 30 * 60
+    /// A failed carbon fetch is retried sooner, but not every tick.
+    static let carbonRetry: TimeInterval = 5 * 60
     /// The cooldown on "plan changed" alerts, and the plan held while it runs.
     var dispatchGate = DispatchAlertGate()
     /// Bumped whenever what a fetch would show changes underneath it — a new key, another meter,
@@ -107,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         // ended moments ago, which fetchInterval needs to spot a switch that has just happened.
         let recent = snapshot.map { cheapIntervals($0, now: now.addingTimeInterval(-switchWindow)) } ?? []
         let current = recent.filter { $0.end > now }
+        refreshCarbonIfDue(now: now)
         updateIcon(intervals: current)
         checkRateChange(intervals: current)
         // A small tolerance stops a tick landing just short of the interval from waiting a whole extra tick.
@@ -179,6 +190,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         snapshot = nil
         fetchGeneration += 1
         dispatchGate.held = nil
+        // Another meter or key may be another postcode.
+        carbonReadings = []
+        carbonPostcode = nil
+        carbonDueAt = .distantPast
+    }
+
+    /// The forecast half hour covering `now`. The forecast runs 48 hours ahead, so a failed refresh
+    /// leaves the last one standing until it runs out rather than blanking the icon.
+    func currentCarbon(now: Date) -> CarbonReading? {
+        guard carbonPostcode != nil else { return nil }
+        return carbonReadings.first { $0.start <= now && now < $0.end }
+    }
+
+    /// Keeps the icon's carbon forecast current. Needs the selected electricity meter's postcode,
+    /// which arrives with meter discovery shortly after launch.
+    func refreshCarbonIfDue(now: Date) {
+        guard !carbonLoading else { return }
+        guard let postcode = MeterPreference.resolve(from: meterChoices, fuel: .electricity)?.postcode,
+            !outwardCode(postcode).isEmpty
+        else { return }
+        if postcode != carbonPostcode {
+            carbonReadings = []
+            carbonDueAt = .distantPast
+        }
+        guard now >= carbonDueAt else { return }
+        carbonLoading = true
+        Task {
+            do {
+                let fetched = try await fetchRegionalReadings(
+                    outward: outwardCode(postcode), period: .forecast,
+                    tz: TimeZone(identifier: "Europe/London") ?? .current)
+                carbonReadings = fetched.readings
+                carbonPostcode = postcode
+                carbonDueAt = Date().addingTimeInterval(Self.carbonInterval)
+            } catch {
+                carbonDueAt = Date().addingTimeInterval(Self.carbonRetry)
+            }
+            carbonLoading = false
+            updateIcon()
+        }
     }
 
 

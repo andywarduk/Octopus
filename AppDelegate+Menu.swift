@@ -11,13 +11,10 @@ extension AppDelegate {
         if let s = snapshot, lastError == nil || Date().timeIntervalSince(s.fetched) < 900 {
             let now = Date()
             let cheap = currentInterval(intervals ?? cheapIntervals(s, now: now), now: now) != nil
-            symbol = cheap ? "bolt.fill" : "bolt"
+            let carbon = currentCarbon(now: now)
+            symbol = statusSymbol(cheap: cheap, lowCarbon: carbon.map { carbonIsLow($0.grams) })
             color = cheap ? .systemGreen : nil
-            if !s.hasCheapRate {
-                tip = "Single rate: \(pence(s.peakRate))"
-            } else {
-                tip = cheap ? "Cheap rate: \(pence(s.cheapRate))" : "Standard rate: \(pence(s.peakRate))"
-            }
+            tip = statusTip(s, cheap: cheap, carbon: carbon)
         } else {
             symbol = "exclamationmark.triangle"
             tip = lastError ?? "Loading…"
@@ -81,7 +78,10 @@ extension AppDelegate {
             if snapshot != nil { menu.addItem(.separator()) }
         }
         if let s = snapshot {
-            for line in menuLines(s, now: Date()) {
+            let now = Date()
+            // The forecast only when it is for the meter now selected; see currentCarbon.
+            let carbon = currentCarbon(now: now) == nil ? [] : carbonReadings
+            for line in menuLines(s, now: now, carbon: carbon) {
                 switch line {
                 case .separator:
                     menu.addItem(.separator())

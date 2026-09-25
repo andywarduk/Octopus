@@ -40,9 +40,12 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
 
 ### What it shows
 
-- **Icon:** a green filled bolt on the cheap rate, an outline bolt on the standard rate, a warning
-  triangle if there is no data or an error. Hover it for the current price.
-- **Menu:** the current rate and when it next changes, the charge Octopus has planned for tonight,
+- **Icon:** a leaf when the grid's carbon intensity where you are is green (100 gCO₂/kWh or
+  under), smoke when it isn't — filled and green on the cheap rate, outlined on the standard rate.
+  Until the carbon forecast has loaded it shows a bolt, filled green or outlined the same way, and
+  a warning triangle if there is no data or an error. Hover it for the current price and intensity.
+- **Menu:** the current rate and when it next changes, the carbon intensity now and when it is
+  next green (100 gCO₂/kWh or under), the charge Octopus has planned for tonight,
   each car's charge level in both percent and kWh, charging status and today's charging goal, your account balance, any
   fixed tariff about to end, and the cheap windows in the next 48 hours including smart-charge
   dispatches.

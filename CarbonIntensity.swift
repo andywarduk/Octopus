@@ -374,9 +374,12 @@ func parseOctopusCarbon(_ rows: [[String: Any]]) -> [CarbonReading] {
     }
 }
 
-private func fetchNationalGridCarbon(
+/// The regional intensity alone, in one keyless request: what the menu bar icon needs, without the
+/// demand and national-mix calls the carbon window adds. Returns the region's name and the
+/// readings, trimmed to the window asked for.
+func fetchRegionalReadings(
     outward: String, period: CarbonPeriod, tz: TimeZone
-) async throws -> CarbonSeries {
+) async throws -> (region: String?, readings: [CarbonReading]) {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(identifier: "UTC")
@@ -423,11 +426,18 @@ private func fetchNationalGridCarbon(
     // National Grid includes the period *ending* at the requested start, so a week asked for from
     // local midnight came back with the 23:30–00:00 half hour of the day before — a bar outside
     // the range the window's own label claims, and 337 half hours where a week has 336.
-    var readings = parseNationalGridCarbon(region["data"] as? [[String: Any]] ?? [])
+    let readings = parseNationalGridCarbon(region["data"] as? [[String: Any]] ?? [])
         .filter { $0.start >= windowStart && $0.start < windowEnd }
     guard !readings.isEmpty else {
         throw ApiError(message: "National Grid returned no carbon intensity for \(outward)")
     }
+    return (region["shortname"] as? String, readings)
+}
+
+private func fetchNationalGridCarbon(
+    outward: String, period: CarbonPeriod, tz: TimeZone
+) async throws -> CarbonSeries {
+    var (regionName, readings) = try await fetchRegionalReadings(outward: outward, period: period, tz: tz)
 
     // Demand and the national mix are national and keyless. Fetched together — neither blocks
     // the other, and both are optional garnish on the intensity view.
@@ -452,7 +462,7 @@ private func fetchNationalGridCarbon(
     }
 
     return CarbonSeries(
-        source: .nationalGrid, period: period, region: region["shortname"] as? String,
+        source: .nationalGrid, period: period, region: regionName,
         outward: outward, readings: readings, fetchedAt: Date())
 }
 

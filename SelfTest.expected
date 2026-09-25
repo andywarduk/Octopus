@@ -179,6 +179,39 @@
     no energy stated    : (no line)
     nothing planned     : (no line)
     only past slots     : (no line)
+  carbon in the menu:
+    green now, for three hours      : Now 80 gCO₂/kWh · low | Green (≤100 g) until Today 19:00
+    green later today               : Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Today 20:00–22:00
+    green tomorrow                  : Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Tomorrow 12:00–14:00
+    exactly 100 g counts as green   : Now 100 gCO₂/kWh · moderate | Green (≤100 g) until Today 16:30
+    never green                     : Now 150 gCO₂/kWh · moderate | Not green (≤100 g) in the next 48 hours
+    green to the end of the forecast: Now 50 gCO₂/kWh · low | Green (≤100 g) for as far as the forecast goes
+    no forecast                     : (no section)
+    placement, with a forecast:
+      [Standard rate now · 30.37p/kWh]
+      Cheap from Today 23:30 (6.90p/kWh)
+      Prices include VAT · standing charge 54.81p/day · updated 16:13
+      ------
+      [Upcoming cheap rate]
+      Today 23:30 – Tomorrow 05:30
+      Tomorrow 13:00 – 14:30  (smart charge)
+      Tomorrow 23:30 – Mon 05:30
+      ------
+      [Carbon intensity]
+      Now 150 gCO₂/kWh · moderate
+      Next green (≤100 g): Today 20:00–22:00
+      ------
+      [Cars]
+  status icon:
+    cheap, low carbon         : leaf.fill
+    cheap, high carbon        : smoke.fill
+    standard, low carbon      : leaf
+    standard, high carbon     : smoke
+    cheap, carbon unknown     : bolt.fill
+    standard, carbon unknown  : bolt
+    100 g low=true, 101 g low=false
+    tip: Cheap rate: 6.90p/kWh · low carbon, 84 gCO₂/kWh
+    tip: Standard rate: 30.37p/kWh
   next rate change:
     standard, hours before              : Sat 23:30 -> cheap
     standard, ten minutes before        : Sat 23:30 -> cheap

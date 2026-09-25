@@ -1,5 +1,6 @@
 // Self test (no network): OctopusMenuBar --selftest
 
+import AppKit
 import Foundation
 import ServiceManagement
 
@@ -727,8 +728,65 @@ func selfTest() {
             + (plannedChargeLine(snapshot, now: atNoon) ?? "(no line)"))
     }
 
+    // The menu's carbon section: now, and when it is next green. Built from a synthetic forecast
+    // of 96 half hours from 15:00Z, with the grams given per half hour by `gramsAt`.
+    print("  carbon in the menu:")
+    let carbonStart = date("2026-09-19T15:00:00Z")
+    func carbonForecast(_ gramsAt: (Int) -> Double) -> [CarbonReading] {
+        (0..<96).map { position in
+            let from = carbonStart.addingTimeInterval(Double(position) * 1800)
+            let grams = gramsAt(position)
+            return CarbonReading(
+                start: from, end: from.addingTimeInterval(1800), grams: grams,
+                index: grams < 100 ? .low : grams < 180 ? .moderate : .high)
+        }
+    }
+    let carbonNow = date("2026-09-19T15:13:00Z")
+    for (label, readings) in [
+        ("green now, for three hours", carbonForecast { $0 < 6 ? 80 : 150 }),
+        ("green later today", carbonForecast { (8..<12).contains($0) ? 90 : 150 }),
+        ("green tomorrow", carbonForecast { (40..<44).contains($0) ? 60 : 150 }),
+        ("exactly 100 g counts as green", carbonForecast { $0 == 0 ? 100 : 150 }),
+        ("never green", carbonForecast { _ in 150 }),
+        ("green to the end of the forecast", carbonForecast { _ in 50 }),
+        ("no forecast", []),
+    ] as [(String, [CarbonReading])] {
+        let texts = carbonLines(readings, now: carbonNow, tz: tzLondon).compactMap { line -> String? in
+            if case .text(let text) = line { return text }
+            return nil
+        }
+        print("    \(label.padding(toLength: 32, withPad: " ", startingAt: 0)): "
+            + (texts.isEmpty ? "(no section)" : texts.joined(separator: " | ")))
+    }
+    print("    placement, with a forecast:")
+    for line in menuLines(snap, now: carbonNow, carbon: carbonForecast { (8..<12).contains($0) ? 90 : 150 }).prefix(14) {
+        switch line {
+        case .separator: print("      ------")
+        case .header(let t): print("      [\(t)]")
+        case .text(let t): print("      \(t)")
+        }
+    }
+
     // The alert fires in both directions now, so the rule has to name the right one. A merged
     // window must not produce a change in its middle, where nothing actually changes.
+    // The icon: shape for carbon, fill (and colour) for the cheap rate, the bolt when carbon is
+    // unknown. Each symbol must exist, or the status item falls back to a bare "⚡".
+    print("  status icon:")
+    for (label, cheap, low) in [
+        ("cheap, low carbon", true, Bool?.some(true)), ("cheap, high carbon", true, false),
+        ("standard, low carbon", false, true), ("standard, high carbon", false, false),
+        ("cheap, carbon unknown", true, nil), ("standard, carbon unknown", false, nil),
+    ] {
+        let symbol = statusSymbol(cheap: cheap, lowCarbon: low)
+        let exists = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil
+        print("    \(label.padding(toLength: 26, withPad: " ", startingAt: 0)): \(symbol)\(exists ? "" : "  <-- MISSING")")
+    }
+    print("    100 g low=\(carbonIsLow(100)), 101 g low=\(carbonIsLow(101))")
+    let greenHalfHour = CarbonReading(
+        start: date("2026-09-19T15:00:00Z"), end: date("2026-09-19T15:30:00Z"), grams: 84, index: .low)
+    print("    tip: \(statusTip(snap, cheap: true, carbon: greenHalfHour))")
+    print("    tip: \(statusTip(snap, cheap: false, carbon: nil))")
+
     print("  next rate change:")
     let window = [
         Interval(start: date("2026-09-19T22:30:00Z"), end: date("2026-09-20T04:30:00Z"), smart: false),

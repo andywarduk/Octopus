@@ -484,7 +484,25 @@ against real data. Treat those paths as unverified.
   PNGs show the worst case rather than what a Retina screen shows.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
-- **Menu order is current rate, upcoming cheap rate, cars, account, tariffs**, then the action
+- **The icon encodes two things, one per visual channel.** The shape is the carbon intensity — a
+  leaf at or under 100 gCO₂/kWh (`greenThresholdGrams`, the carbon chart's own line), smoke above —
+  and fill plus colour is the rate: filled green when cheap, an outline template otherwise.
+  Keeping green for "cheap" alone matters, so the leaf is not green in its own right; it is only
+  green because the rate is. Carbon unknown falls back to the bolt, which says the rate alone
+  rather than guessing. `statusSymbol` is the rule and `--selftest` checks every symbol exists,
+  since a missing one leaves the item as bare text.
+- **The icon's carbon comes from one keyless request every half hour** (`fetchRegionalReadings`,
+  National Grid's regional forecast for the selected meter's postcode), not the carbon window's
+  full fetch with its demand and national-mix calls. A failed refresh keeps the last forecast
+  until it runs out, since it covers 48 hours. It is **not screened for the sunrise glitch**:
+  screening needs GB demand, and the half hour in progress never has any (see `DemandGap`), so a
+  misfire like 23 September's 5 gCO₂ would show a leaf for that half hour. Left alone rather than
+  papered over with a solar-share heuristic nobody can justify. The menu's carbon section
+  (`carbonLines`) works from the same readings, so it says when the grid is next green but
+  **deliberately names no "cleanest half hour"**: unscreened, that would nominate the glitch, which
+  is exactly what `CarbonSeries.cleanest` exists to prevent in the window.
+- **Menu order is current rate, upcoming cheap rate, carbon intensity, cars, account, tariffs**,
+  then the action
   items: Electricity Use…, Gas Use…, Refresh Now, Settings…, Quit. The informational sections come
   from `menuLines`, which `--selftest` prints at three moments; the action items are built in
   `rebuildMenu` and are not covered by any test, so check those in the running app. An error,
