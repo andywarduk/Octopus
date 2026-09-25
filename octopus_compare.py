@@ -35,7 +35,8 @@ Options:
   --cache FILE           where fetched days are kept (default ~/.cache/octopus_compare/MPAN.json)
   --refresh              ignore the cache and fetch every day again
 
-Fetching a year costs one request per day the first time; after that only new days are fetched.
+Fetching a year costs one request per day the first time; after that only the last week is
+fetched again, since Octopus sometimes corrects a day's costs after publishing them.
 
 Python 3.9 or later, standard library only.
 """
@@ -57,6 +58,11 @@ CONSUMPTION_STATS = {"CONSUMPTION_COST", "TOU_BUCKET_COST"}
 # A half hour this big, or billed to an EV bucket, is treated as the car charging. 1.5 kWh is
 # 3 kW sustained: well above a household baseline, well below a 7 kW charger.
 CAR_SIZED_KWH = 1.5
+
+# How far back Octopus has been seen correcting published costs, with room to spare: a charge
+# billed at the standard rate was reclassified as a smart charge about two days later. Days this
+# recent are fetched again on every run rather than trusted from the cache.
+REVISION_DAYS = 7
 
 # The tariffs worth comparing for a home with an EV and no heat pump, storage heaters or battery.
 # Cosy, Snug, Flux and Zero need equipment or a home most accounts don't have, so they are left out.
@@ -203,7 +209,9 @@ def load_usage(token, prop_id, mpan, tz, days, cache_path, refresh):
     fetched = 0
     for index, day in enumerate(wanted):
         key = day.isoformat()
-        if key in cache:
+        # Octopus revises costs after it publishes them: a smart charge first billed at the standard
+        # rate came back repriced two days later. So the last week is always fetched again.
+        if key in cache and day < today - timedelta(days=REVISION_DAYS):
             continue
         print(f"\rFetching {day:%d %b %Y} ({index + 1}/{len(wanted)})…", end="", file=sys.stderr)
         try:

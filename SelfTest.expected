@@ -141,6 +141,7 @@
     daily meter, day published: complete=true
   cache freshness:
     settled week, fetched months ago: true
+    complete week, fetched 3 days after it ended, months ago: false
     incomplete week, fetched months ago: false
     incomplete week, fetched just now: true
   axis scale (max, step, ticks):

@@ -633,10 +633,16 @@ func selfTest() {
     }
 
     print("  cache freshness:")
-    let settled = CachedUsage(series: UsageSeries(), fetchedAt: date("2026-01-01T00:00:00Z"), complete: true)
-    let pending = CachedUsage(series: UsageSeries(), fetchedAt: date("2026-01-01T00:00:00Z"), complete: false)
+    // A week that ended long before it was fetched can't change; one fetched soon after it ended
+    // still can, since Octopus corrects costs after publishing them.
+    let oldWeek = UsageSeries(from: date("2025-12-01T00:00:00Z"), to: date("2025-12-08T00:00:00Z"))
+    let recentWeek = UsageSeries(from: date("2025-12-22T00:00:00Z"), to: date("2025-12-29T00:00:00Z"))
+    let settled = CachedUsage(series: oldWeek, fetchedAt: date("2026-01-01T00:00:00Z"), complete: true)
+    let unrevised = CachedUsage(series: recentWeek, fetchedAt: date("2026-01-01T00:00:00Z"), complete: true)
+    let pending = CachedUsage(series: oldWeek, fetchedAt: date("2026-01-01T00:00:00Z"), complete: false)
     let justNow = CachedUsage(series: UsageSeries(), fetchedAt: Date(), complete: false)
     print("    settled week, fetched months ago: \(settled.isFresh())")
+    print("    complete week, fetched 3 days after it ended, months ago: \(unrevised.isFresh())")
     print("    incomplete week, fetched months ago: \(pending.isFresh())")
     print("    incomplete week, fetched just now: \(justNow.isFresh())")
     print("  axis scale (max, step, ticks):")

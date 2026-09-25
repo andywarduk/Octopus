@@ -180,13 +180,23 @@ func aggregateUsage(
 struct CachedUsage {
     var series: UsageSeries
     var fetchedAt: Date
-    /// Every day in the window came back with data, so it can no longer change.
+    /// Every period in the window came back with data. Not the same as final: see `settled`.
     var complete: Bool
 
-    /// A settled week is kept indefinitely. One still waiting on Octopus is re-checked, since
-    /// the missing days appear later.
+    /// Octopus revises costs after publishing them — a smart charge first billed at the standard
+    /// rate was reclassified about two days later — so a complete week only counts as settled once
+    /// it ended more than this long before it was fetched.
+    static let revisionWindow: TimeInterval = 7 * 86400
+
+    var settled: Bool {
+        guard complete, let end = series.to else { return false }
+        return fetchedAt.timeIntervalSince(end) >= Self.revisionWindow
+    }
+
+    /// A settled week is kept indefinitely. Anything else — days still to be published, or costs
+    /// still open to correction — is re-checked after 15 minutes.
     func isFresh(now: Date = Date()) -> Bool {
-        complete || now.timeIntervalSince(fetchedAt) < 15 * 60
+        settled || now.timeIntervalSince(fetchedAt) < 15 * 60
     }
 }
 

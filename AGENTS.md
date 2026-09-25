@@ -101,7 +101,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `SelfTest.expected`, `selftest.sh` | The accepted `--selftest` output, and the script that diffs against it |
 | `main.swift` | Entry point and command-line flags |
 
-`octopus_rate.py`, `octopus_history.py` and `octopus_carbon.py` are standalone; standard library
+`octopus_rate.py`, `octopus_history.py`, `octopus_carbon.py` and `octopus_compare.py` are standalone; standard library
 only, Python 3.9+. `octopus_carbon.py` needs no API key unless asked for the Octopus source or
 for the account's postcode, since both of the sources behind it are keyless.
 They duplicate the auth and meter-selection logic rather than sharing it.
@@ -257,6 +257,14 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   day the clocks go back has 50. Asking for 48 cut off the last hour, which then read as "not
   published yet" forever and kept the week from ever counting as settled. `halfHours(from:to:)`
   sizes each day's request; the spring day has 46.
+- **Published costs are not final.** A half hour on 23 September 2026 — the car drawing 3.72 kWh at
+  15:30 during an Intelligent Octopus Go session — was published at the standard rate with no
+  `EV_DEVICE` bucket, and about two days later came back reclassified as a smart charge at the
+  off-peak rate. So a day whose readings are all in is not a day whose costs are settled, and
+  `completedDispatches` can't be used to check, since it keeps only about a day. The usage window
+  counts a week settled only once it ended over a week before it was fetched (`CachedUsage.settled`),
+  and `octopus_compare.py` refetches its last week on every run. The seven days are a margin on one
+  observed two-day correction, not a published limit.
 - **Readings lag by roughly two days.** The current week always has a blank tail. Distinguish
   "not published" from "used nothing": both look like zero, and only the first should be a gap.
 - **Zero usage is data.** A meter reporting all zeros still returns readings and standing charges.
@@ -305,7 +313,8 @@ lightly:
   request — so the next attempt rediscovers them rather than failing the same way.
 - Fetched weeks are cached in memory, keyed by meter and week offset. A settled week is kept
   indefinitely; one still waiting on Octopus is re-checked after 15 minutes. The current week is
-  never "settled", so it always re-checks.
+  never "settled", so it always re-checks, and nor is last week until a week after it ended,
+  since Octopus corrects costs after publishing them.
 - **"Settled" is judged at the granularity the meter reports in**, via `UsageSeries.isComplete`.
   Judging it per day marks a part-published day as finished — today usually has an hour or two —
   so the week is cached for good and the rest of the day never appears. A daily-only meter is
