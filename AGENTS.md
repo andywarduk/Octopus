@@ -87,7 +87,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `OctopusAPI.swift` | GraphQL transport, the shared session cache, and the tariff and device halves of a `Snapshot` |
 | `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch |
 | `UsageChart.swift` | The stacked column chart, its palette, and the offscreen renderer |
-| `UsageWindowController.swift` | One usage window; one instance per fuel |
+| `UsageWindowController.swift` | One usage window; one instance per meter |
 | `CarbonIntensity.swift` | Carbon intensity model and both sources' fetch and parsing |
 | `CarbonChart.swift` | The carbon intensity chart, its sequential ramp, and its renderer |
 | `CarbonWindowController.swift` | The carbon intensity window |
@@ -494,17 +494,30 @@ against real data. Treat those paths as unverified.
   works from the same readings and says when the grid is next green; it names no "cleanest half
   hour", which is the carbon window's job.
 - **Menu order is current rate, upcoming cheap rate, carbon intensity, cars, account, tariffs**,
-  then the action
-  items: Electricity Use…, Gas Use…, Refresh Now, Settings…, Quit. The informational sections come
-  from `menuLines`, which `--selftest` prints at three moments; the action items are built in
-  `rebuildMenu` and are not covered by any test, so check those in the running app. An error,
+  then Refresh Now, Settings… and Quit. **The windows open from the information itself**: the
+  carbon section's "Now … gCO₂/kWh" line opens the carbon window, with when it is next green as
+  its subtitle, and each tariff line opens its meter's usage, with its end date as the subtitle —
+  macOS 14+; a grey line under it on 13 — and a tooltip saying what it opens. Until the carbon
+  forecast loads, a plain "Carbon Intensity…" item stands in. A two-property account gets one
+  usage item per address with nothing to match up, and an export tariff, having no usage, stays
+  plain text. These are `Line.action` entries from `menuLines`, so `--selftest` prints their
+  placement; `rebuildMenu` turns them into items, numbering the usage
+  items ⌘1, ⌘2… in listing order (none past nine) and giving the carbon one ⌘C. Each tariff carries its `MeterChoice`, built from the supply
+  point the tariff query returns, so the items need no meter discovery; an export meter gets
+  none. The carbon item stays even with no Octopus data, since the window needs none. Usage
+  windows are one per meter, keyed by `MeterChoice.id`, and closed when the key changes.
+  Refresh Now, Settings… and Quit are built in `rebuildMenu` and are not covered by any test. An error,
   when there is one, comes before everything, split off by a separator: at the foot of the
   information it sat under the tariff list while the prices above it went stale.
   A single-rate tariff skips the upcoming-cheap section rather than showing it empty — that used
   to be an early return, which forced the section to be last, and is now an `if` so the order is
   free to change. The VAT and standing-charge footnote sits directly under the prices it
-  qualifies rather than at the foot of the menu, and `rebuildMenu` renders it in secondary ink by
-  matching its "Prices include" prefix, the same way it treats indented detail lines.
+  qualifies rather than at the foot of the menu, as the subtitle of the line below the rate
+  heading — or alone, in the same style, when there is no such line. **Details sit under their
+  line in the subtitle style**:
+  a clickable line uses the menu item's own subtitle (macOS 14+), and a non-clickable one — a
+  car, the balance, an export tariff — is a `Line.info`, drawn by `infoItem` with the same
+  smaller secondary type under the title, aligned with it rather than indented.
 - **`octopus_rate.py` mirrors the same order** and the same agreement and charge-goal rules. It
   shares no code with the app, so a change to one is a change to make twice.
 - **Balance and agreement dates ride on the tariff request.** Both hang off the same `account`

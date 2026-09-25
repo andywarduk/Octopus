@@ -243,15 +243,12 @@ func halfHours(from start: Date, to end: Date) -> Int {
     max(1, Int((end.timeIntervalSince(start) / 1800).rounded()))
 }
 
-/// Pulls `days` local days, a day per request, ending `weeksBack` weeks before today.
-func fetchUsage(apiKey: String, days: Int, weeksBack: Int = 0, fuel: Fuel = .electricity) async throws
+/// Pulls `days` local days of one meter, a day per request, ending `weeksBack` weeks before today.
+func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack: Int = 0) async throws
     -> UsageSeries
 {
     let token = try await OctopusSession.shared.token(apiKey: apiKey)
-    let choices = try await OctopusSession.shared.meters(apiKey: apiKey)
-    guard let choice = MeterPreference.resolve(from: choices, fuel: fuel) else {
-        throw ApiError(message: "No \(fuel.title.lowercased()) meter found on this account")
-    }
+    let fuel = choice.fuel
     let account = choice.accountNumber
     let supplyPoint = choice.supplyPoint
     let propertyId = choice.propertyId

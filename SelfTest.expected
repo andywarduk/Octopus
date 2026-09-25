@@ -71,6 +71,10 @@
     electricity  Octopus 24M Fixed        9 Other Road   last day Tue 20 Oct 2026
     electricity  Intelligent Octopus Go   1 Test Lane    no end date
     6 agreements, 2 properties; 5 end within 60 days
+  meters behind tariffs:
+    Intelligent Octopus Go   electricity 2000000000001 at property 236766, A-1
+    Outgoing Octopus         no usage (export)
+    Flexible Octopus         gas 9000000001 at property 236766, A-1
   tariff alert thresholds (daysLeft, already alerted -> new alert):
     45  days, alerted never -> silent
     30  days, alerted never -> alert at 30
@@ -157,10 +161,10 @@
     Balance: £532.06 in credit
         £710.62 in credit expected in a year
     [Tariffs]
-    Intelligent Octopus Go (electricity)
+    → Intelligent Octopus Go (electricity) | No end date
+    → Octopus 12M Fixed (gas) | Ends Thu 8 Oct · in 19 days
+    Outgoing Octopus (electricity)
         No end date
-    Octopus 12M Fixed (gas)
-        Ends Thu 8 Oct · in 19 days
   tariff end wording:
     0 days: menu "Ends Sat 19 Sep · last day today", alert "Octopus 12M Fixed ends today"
     1 day: menu "Ends Sun 20 Sep · tomorrow", alert "Octopus 12M Fixed ends tomorrow"
@@ -173,17 +177,17 @@
     nothing planned     : (no line)
     only past slots     : (no line)
   carbon in the menu:
-    green now, for three hours      : Now 80 gCO₂/kWh · low | Green (≤100 g) until Today 19:00
-    green later today               : Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Today 20:00–22:00
-    green tomorrow                  : Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Tomorrow 12:00–14:00
-    exactly 100 g counts as green   : Now 100 gCO₂/kWh · moderate | Green (≤100 g) until Today 16:30
-    never green                     : Now 150 gCO₂/kWh · moderate | Not green (≤100 g) in the next 48 hours
-    green to the end of the forecast: Now 50 gCO₂/kWh · low | Green (≤100 g) for as far as the forecast goes
-    no forecast                     : (no section)
+    green now, for three hours      : → Now 80 gCO₂/kWh · low | Green (≤100 g) until Today 19:00
+    green later today               : → Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Today 20:00–22:00
+    green tomorrow                  : → Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Tomorrow 12:00–14:00
+    exactly 100 g counts as green   : → Now 100 gCO₂/kWh · moderate | Green (≤100 g) until Today 16:30
+    never green                     : → Now 150 gCO₂/kWh · moderate | Not green (≤100 g) in the next 48 hours
+    green to the end of the forecast: → Now 50 gCO₂/kWh · low | Green (≤100 g) for as far as the forecast goes
+    no forecast                     : → Carbon Intensity…
     placement, with a forecast:
       [Standard rate now · 30.37p/kWh]
       Cheap from Today 23:30 (6.90p/kWh)
-      Prices include VAT · standing charge 54.81p/day · updated 16:13
+          Prices include VAT · standing charge 54.81p/day · updated 16:13
       ------
       [Upcoming cheap rate]
       Today 23:30 – Tomorrow 05:30
@@ -191,10 +195,14 @@
       Tomorrow 23:30 – Mon 05:30
       ------
       [Carbon intensity]
-      Now 150 gCO₂/kWh · moderate
-      Next green (≤100 g): Today 20:00–22:00
+      → Now 150 gCO₂/kWh · moderate | Next green (≤100 g): Today 20:00–22:00
       ------
       [Cars]
+      Charging 13:00–14:30 · about 8 kWh planned
+      Mini Cooper: 62% (target 80% by 07:00)
+          About 30.5 of 49.2 kWh in the battery
+          Not charging · smart control not available
+          Charge level as of Today 15:08
   status icon:
     cheap, low carbon         : leaf.fill
     cheap, high carbon        : smoke.fill
@@ -216,12 +224,15 @@
 --- Sat 16:13 BST: cheap=false
   [Standard rate now · 30.37p/kWh]
   Cheap from Today 23:30 (6.90p/kWh)
-  Prices include VAT · standing charge 54.81p/day · updated 16:13
+      Prices include VAT · standing charge 54.81p/day · updated 16:13
   ------
   [Upcoming cheap rate]
   Today 23:30 – Tomorrow 05:30
   Tomorrow 13:00 – 14:30  (smart charge)
   Tomorrow 23:30 – Mon 05:30
+  ------
+  [Carbon intensity]
+  → Carbon Intensity…
   ------
   [Cars]
   Charging 13:00–14:30 · about 8 kWh planned
@@ -249,13 +260,16 @@
 --- Sun 02:00 BST: cheap=true
   [Cheap rate now · 6.90p/kWh]
   Back to standard at Today 05:30 (30.37p/kWh)
-  Prices include VAT · standing charge 54.81p/day · updated 16:13
+      Prices include VAT · standing charge 54.81p/day · updated 16:13
   ------
   [Upcoming cheap rate]
   Now – Today 05:30
   Today 13:00 – 14:30  (smart charge)
   Today 23:30 – Tomorrow 05:30
   Tomorrow 23:30 – Tue 05:30
+  ------
+  [Carbon intensity]
+  → Carbon Intensity…
   ------
   [Cars]
   Charging 13:00–14:30 · about 8 kWh planned
@@ -283,7 +297,10 @@
 --- flat tariff: cheap=false
   [Single rate · 30.37p/kWh]
   This tariff has no cheap window
-  Prices include VAT · standing charge 54.81p/day · updated 16:13
+      Prices include VAT · standing charge 54.81p/day · updated 16:13
+  ------
+  [Carbon intensity]
+  → Carbon Intensity…
   ------
   [Cars]
   Charging 13:00–14:30 · about 8 kWh planned

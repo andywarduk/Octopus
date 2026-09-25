@@ -19,10 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var tariffCheck: NSButton?
     var loginCheck: NSButton?
     var removeButton: NSButton?
-    lazy var usageControllers: [Fuel: UsageWindowController] = Dictionary(
-        uniqueKeysWithValues: Fuel.allCases.map {
-            ($0, UsageWindowController(fuel: $0, apiKey: { [weak self] in self?.apiKey }))
-        })
+    /// One usage window per meter, created the first time its menu item is chosen.
+    var usageControllers: [String: UsageWindowController] = [:]
+    /// What each action item in the menu opens, indexed by the item's tag.
+    var menuActions: [MenuAction] = []
     /// One window, with the source switchable inside it. Both sources answer regionally, so the
     /// postcode comes from whichever property's electricity meter is selected.
     lazy var carbonController = CarbonWindowController(
@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         postcode: { [weak self] in
             MeterPreference.resolve(from: self?.meterChoices ?? [], fuel: .electricity)?.postcode
         })
-    var meterPickers: [Fuel: NSPopUpButton] = [:]
+    var meterPicker: NSPopUpButton?
     var meterChoices: [MeterChoice] = []
     /// Read from the Keychain once at launch, never while the menu is open: the system's unlock
     /// prompt can't take keyboard input while menu tracking has focus.
@@ -233,16 +233,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     }
 
 
-    /// Unknown until discovery runs, and an unknown fuel is shown rather than hidden.
-    func hasMeters(_ fuel: Fuel) -> Bool {
-        meterChoices.isEmpty || meterChoices.contains { $0.fuel == fuel }
+    @objc func openMenuAction(_ sender: NSMenuItem) {
+        guard menuActions.indices.contains(sender.tag) else { return }
+        switch menuActions[sender.tag] {
+        case .carbon:
+            carbonController.show()
+        case .usage(let meter):
+            usageController(for: meter).show()
+        }
     }
 
-    @objc func showUsage() { usageControllers[.electricity]?.show() }
+    func usageController(for meter: MeterChoice) -> UsageWindowController {
+        if let existing = usageControllers[meter.id] { return existing }
+        let controller = UsageWindowController(
+            meter: meter, cascade: usageControllers.count, apiKey: { [weak self] in self?.apiKey })
+        usageControllers[meter.id] = controller
+        return controller
+    }
 
-    @objc func showGasUsage() { usageControllers[.gas]?.show() }
+    /// The usage windows belonged to the key: another key is another account's meters.
+    func closeUsageWindows() {
+        for controller in usageControllers.values { controller.close() }
+        usageControllers.removeAll()
+    }
 
-    @objc func showCarbon() { carbonController.show() }
 
     @objc func refreshNow() { refresh(manual: true) }
 

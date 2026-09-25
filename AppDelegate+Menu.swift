@@ -50,17 +50,35 @@ extension AppDelegate {
     func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
 
     /// A custom-view item: it never highlights on hover, and unlike a disabled item it isn't dimmed.
-    func infoItem(_ title: String, font: NSFont, color: NSColor) -> NSMenuItem {
-        let label = NSTextField(labelWithString: title)
-        label.font = font
-        label.textColor = color
-        label.sizeToFit()
+    /// `details` are drawn under the title in the subtitle style — smaller, secondary, and aligned
+    /// with the title — so a non-clickable line reads like a clickable one's subtitle.
+    func infoItem(_ title: String?, font: NSFont, color: NSColor, details: [String] = []) -> NSMenuItem {
+        var labels: [NSTextField] = []
+        if let title {
+            let label = NSTextField(labelWithString: title)
+            label.font = font
+            label.textColor = color
+            labels.append(label)
+        }
+        for detail in details {
+            let label = NSTextField(labelWithString: detail)
+            label.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
+            label.textColor = .secondaryLabelColor
+            labels.append(label)
+        }
+        for label in labels { label.sizeToFit() }
         let inset = NSPoint(x: 14, y: 3)
-        let view = NSView(frame: NSRect(
-            x: 0, y: 0, width: label.frame.width + inset.x * 2, height: label.frame.height + inset.y * 2))
-        label.frame.origin = inset
+        let height = labels.reduce(0) { $0 + $1.frame.height } + inset.y * 2
+        let width = (labels.map(\.frame.width).max() ?? 0) + inset.x * 2
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        // Top down: the view is not flipped, so the first label sits highest.
+        var y = height - inset.y
+        for label in labels {
+            y -= label.frame.height
+            label.frame.origin = NSPoint(x: inset.x, y: y)
+            view.addSubview(label)
+        }
         view.autoresizingMask = [.width]
-        view.addSubview(label)
         let mi = NSMenuItem()
         mi.view = view
         return mi
@@ -77,52 +95,82 @@ extension AppDelegate {
             menu.addItem(infoItem("⚠︎ \(e)", font: .menuFont(ofSize: 0), color: .labelColor))
             if snapshot != nil { menu.addItem(.separator()) }
         }
+        menuActions = []
+        let now = Date()
+        // The forecast only when it is for the meter now selected; see currentCarbon.
+        let carbon = currentCarbon(now: now) == nil ? [] : carbonReadings
         if let s = snapshot {
-            let now = Date()
-            // The forecast only when it is for the meter now selected; see currentCarbon.
-            let carbon = currentCarbon(now: now) == nil ? [] : carbonReadings
-            for line in menuLines(s, now: now, carbon: carbon) {
-                switch line {
-                case .separator:
-                    menu.addItem(.separator())
-                case .header(let t):
-                    menu.addItem(infoItem(t, font: .boldSystemFont(ofSize: NSFont.systemFontSize), color: .labelColor))
-                case .text(let t):
-                    // Indented lines are details; so is the footnote under the prices.
-                    let detail = t.hasPrefix("    ") || t.hasPrefix("Prices include")
-                    menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: detail ? .secondaryLabelColor : .labelColor))
-                }
+            add(menuLines(s, now: now, carbon: carbon))
+        } else {
+            if loading || lastError == nil {
+                // "No data yet" under an error only repeats it; "Loading…" still says a retry is running.
+                menu.addItem(infoItem(loading ? "Loading…" : "No data yet", font: .menuFont(ofSize: 0), color: .labelColor))
             }
-        } else if loading || lastError == nil {
-            // "No data yet" under an error only repeats it; "Loading…" still says a retry is running.
-            menu.addItem(infoItem(loading ? "Loading…" : "No data yet", font: .menuFont(ofSize: 0), color: .labelColor))
-        }
-        menu.addItem(.separator())
-        // A usage window is only offered for a fuel the account actually has. Until discovery
-        // finishes both are shown, since hiding them on "not known yet" would be wrong.
-        func add(_ items: [(String, Selector, String)]) {
-            for (title, action, key) in items {
-                let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
-                mi.target = self
-                menu.addItem(mi)
-            }
+            // The carbon window needs no Octopus data, so it stays reachable without any.
+            add(carbonLines(carbon, now: now, tz: TimeZone(identifier: "Europe/London") ?? .current))
         }
 
-        // The windows this app opens.
-        var windows: [(String, Selector, String)] = []
-        if hasMeters(.electricity) { windows.append(("Electricity Use…", #selector(showUsage), "u")) }
-        if hasMeters(.gas) { windows.append(("Gas Use…", #selector(showGasUsage), "g")) }
-        // Not gated on a meter: it needs a postcode rather than a supply point, and the window
-        // says so plainly if there isn't one.
-        windows.append(("Carbon Intensity…", #selector(showCarbon), "c"))
-        add(windows)
-
-        // Acting on the app itself, rather than opening something.
+        // Acting on the app itself, rather than opening something. The windows open from the
+        // sections they belong to: usage under each meter's tariff, carbon under its own figures.
         menu.addItem(.separator())
-        add([
+        for (title, action, key) in [
             ("Refresh Now", #selector(refreshNow), "r"),
             ("Settings…", #selector(showSettings), ","),
             ("Quit", #selector(quit), "q"),
-        ])
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.target = self
+            menu.addItem(item)
+        }
+    }
+
+    private func add(_ lines: [Line]) {
+        // Usage items are numbered ⌘1, ⌘2… in the order their tariffs are listed, so every meter
+        // gets one, not just the first of each fuel; past nine they go without. Carbon keeps ⌘C.
+        var usageNumber = 0
+        for line in lines {
+            switch line {
+            case .separator:
+                menu.addItem(.separator())
+            case .header(let t):
+                menu.addItem(infoItem(t, font: .boldSystemFont(ofSize: NSFont.systemFontSize), color: .labelColor))
+            case .text(let t):
+                menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: .labelColor))
+            case .info(let title, let detail):
+                // An empty title is a detail standing alone, such as the price footnote with no
+                // line above it to belong to.
+                menu.addItem(infoItem(
+                    title.isEmpty ? nil : title, font: .menuFont(ofSize: 0), color: .labelColor,
+                    details: detail.components(separatedBy: "\n")))
+            case .action(let title, let action, let detail):
+                let key: String
+                switch action {
+                case .carbon:
+                    key = "c"
+                case .usage:
+                    usageNumber += 1
+                    key = usageNumber <= 9 ? String(usageNumber) : ""
+                }
+                let item = NSMenuItem(title: title, action: #selector(openMenuAction(_:)), keyEquivalent: key)
+                item.target = self
+                item.tag = menuActions.count
+                menuActions.append(action)
+                // A tariff line doesn't say it opens anything, so the tooltip does.
+                switch action {
+                case .usage(let meter): item.toolTip = "Show \(meter.fuel.rawValue) use"
+                case .carbon: item.toolTip = "Show carbon intensity"
+                }
+                if let detail, #available(macOS 14, *) {
+                    item.subtitle = detail
+                    menu.addItem(item)
+                } else {
+                    menu.addItem(item)
+                    if let detail {
+                        // No native subtitle before macOS 14: the same look, drawn as its own row.
+                        menu.addItem(infoItem(nil, font: .menuFont(ofSize: 0), color: .labelColor, details: [detail]))
+                    }
+                }
+            }
+        }
     }
 }

@@ -357,6 +357,30 @@ func selfTest() {
         + "\(endingSoon(parsedEnds, now: date("2026-09-22T12:00:00Z"), tz: tzLondon).count) end within "
         + "\(tariffNoticePeriod) days")
 
+    // Each agreement carries its meter, so the menu can open that meter's usage from under it —
+    // import and gas meters only; an export meter has no usage window.
+    print("  meters behind tariffs:")
+    let meteredNode: [String: Any] = [
+        "properties": [[
+            "id": "236766", "address": "1 Test Lane, Corsham, SN13 9XX", "postcode": "SN13 9XX",
+            "electricityMeterPoints": [
+                ["mpan": "2000000000001", "direction": "IMPORT",
+                 "agreements": [["validFrom": "2026-08-23T23:00:00+00:00", "tariff": ["displayName": "Intelligent Octopus Go"]]]],
+                ["mpan": "2000000000002", "direction": "EXPORT",
+                 "agreements": [["validFrom": "2026-08-23T23:00:00+00:00", "tariff": ["displayName": "Outgoing Octopus"]]]],
+            ],
+            "gasMeterPoints": [
+                ["mprn": "9000000001",
+                 "agreements": [["validFrom": "2026-08-23T23:00:00+00:00", "tariff": ["displayName": "Flexible Octopus"]]]],
+            ],
+        ]],
+    ]
+    for end in parseTariffEnds(meteredNode, accountNumber: "A-1", now: date("2026-09-22T12:00:00Z")) {
+        print("    \(end.name.padding(toLength: 24, withPad: " ", startingAt: 0)) "
+            + (end.meter.map { "\($0.fuel.rawValue) \($0.supplyPoint) at property \($0.propertyId), \($0.accountNumber)" }
+                ?? "no usage (export)"))
+    }
+
     print("  tariff alert thresholds (daysLeft, already alerted -> new alert):")
     for (days, alerted) in [(45, nil), (30, nil), (16, 30), (16, nil), (14, 30), (7, 14), (1, 7), (0, 1), (0, nil)]
         as [(Int, Int?)]
@@ -636,10 +660,19 @@ func selfTest() {
     var oneHouse = snap
     oneHouse.propertyCount = 1
     oneHouse.tariffEnds = [
-        TariffEnd(fuel: .electricity, name: "Intelligent Octopus Go", property: "1 Test Lane"),
+        TariffEnd(
+            fuel: .electricity, name: "Intelligent Octopus Go", property: "1 Test Lane",
+            meter: MeterChoice(
+                fuel: .electricity, accountNumber: "A-1", propertyId: "1", address: "1 Test Lane",
+                supplyPoint: "2000000000001")),
         TariffEnd(
             fuel: .gas, name: "Octopus 12M Fixed", ends: date("2026-10-08T23:00:00Z"),
-            property: "1 Test Lane"),
+            property: "1 Test Lane",
+            meter: MeterChoice(
+                fuel: .gas, accountNumber: "A-1", propertyId: "1", address: "1 Test Lane",
+                supplyPoint: "9000000001")),
+        // An export meter's tariff: listed, but with no usage to open.
+        TariffEnd(fuel: .electricity, name: "Outgoing Octopus", property: "1 Test Lane"),
     ]
     for line in accountLines(oneHouse, now: date("2026-09-19T15:13:00Z"))
         + tariffLines(oneHouse, now: date("2026-09-19T15:13:00Z"))
@@ -647,6 +680,10 @@ func selfTest() {
         switch line {
         case .header(let t): print("    [\(t)]")
         case .text(let t): print("    \(t)")
+        case .info(let t, let detail):
+            print("    \(t)")
+            for line in detail.components(separatedBy: "\n") { print("        \(line)") }
+        case .action(let t, _, let detail): print("    → \(t)" + (detail.map { " | \($0)" } ?? ""))
         case .separator: break
         }
     }
@@ -662,7 +699,7 @@ func selfTest() {
                 property: "1 Test Lane"),
         ]
         let detail = tariffLines(ending, now: date("2026-09-19T15:13:00Z")).compactMap { line -> String? in
-            if case .text(let text) = line, text.hasPrefix("    ") { return text.trimmingCharacters(in: .whitespaces) }
+            if case .info(_, let detail) = line { return detail }
             return nil
         }
         print("    \(days) day\(days == 1 ? "" : "s"): menu \"\(detail.joined())\", alert \"Octopus 12M Fixed ends \(dayCount(days))\"")
@@ -721,6 +758,7 @@ func selfTest() {
     ] as [(String, [CarbonReading])] {
         let texts = carbonLines(readings, now: carbonNow, tz: tzLondon).compactMap { line -> String? in
             if case .text(let text) = line { return text }
+            if case .action(let title, _, let detail) = line { return "→ \(title)" + (detail.map { " | \($0)" } ?? "") }
             return nil
         }
         print("    \(label.padding(toLength: 32, withPad: " ", startingAt: 0)): "
@@ -732,6 +770,10 @@ func selfTest() {
         case .separator: print("      ------")
         case .header(let t): print("      [\(t)]")
         case .text(let t): print("      \(t)")
+        case .info(let t, let detail):
+            print("      \(t)")
+            for line in detail.components(separatedBy: "\n") { print("          \(line)") }
+        case .action(let t, _, let detail): print("      → \(t)" + (detail.map { " | \($0)" } ?? ""))
         }
     }
 
@@ -789,6 +831,10 @@ func selfTest() {
             case .separator: print("  ------")
             case .header(let t): print("  [\(t)]")
             case .text(let t): print("  \(t)")
+            case .info(let t, let detail):
+                print("  \(t)")
+                for line in detail.components(separatedBy: "\n") { print("      \(line)") }
+            case .action(let t, _, let detail): print("  → \(t)" + (detail.map { " | \($0)" } ?? ""))
             }
         }
     }

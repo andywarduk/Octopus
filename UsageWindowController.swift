@@ -1,11 +1,14 @@
-// One usage window. There is an instance per fuel, so electricity and gas each get their own
-// window, week position, cache and controls without sharing state.
+// One usage window. There is an instance per meter, opened from under the tariff that supplies
+// it, so each meter gets its own window, week position, cache and controls without sharing state.
 
 import Cocoa
 
 @MainActor
 final class UsageWindowController: NSObject {
-    let fuel: Fuel
+    let meter: MeterChoice
+    var fuel: Fuel { meter.fuel }
+    /// How far to step this window from the centre, so several open at once don't stack exactly.
+    private let cascade: Int
     /// How the key is read and whether a fetch may run at all.
     private let apiKey: () -> String?
 
@@ -27,9 +30,16 @@ final class UsageWindowController: NSObject {
     /// neither shown nor cached when it lands.
     private var generation = 0
 
-    init(fuel: Fuel, apiKey: @escaping () -> String?) {
-        self.fuel = fuel
+    init(meter: MeterChoice, cascade: Int, apiKey: @escaping () -> String?) {
+        self.meter = meter
+        self.cascade = cascade
         self.apiKey = apiKey
+    }
+
+    /// Closes the window for good: the key it belonged to has gone.
+    func close() {
+        generation += 1
+        window?.close()
     }
 
     var isVisible: Bool { window?.isVisible ?? false }
@@ -41,7 +51,7 @@ final class UsageWindowController: NSObject {
         if series.isEmpty { load() }
     }
 
-    /// Called when the meter for this fuel changes: nothing already fetched still applies.
+    /// Drops everything fetched and starts again.
     func resetForMeterChange() {
         generation += 1
         cache.removeAll()
@@ -134,18 +144,20 @@ final class UsageWindowController: NSObject {
         let newWindow = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 620, height: 380),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        newWindow.title = fuel.windowTitle
+        // Named for its address, since two meters of one fuel can be open side by side.
+        let place = meter.address.split(separator: ",").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        newWindow.title = place.isEmpty ? fuel.windowTitle : "\(fuel.windowTitle) · \(place)"
         newWindow.contentView = container
         newWindow.isReleasedWhenClosed = false
         newWindow.setContentSize(CGSize(width: 620, height: 380))
         newWindow.contentMinSize = CGSize(width: 460, height: 300)
-        // Offset the second window so it doesn't land exactly on the first.
+        // Stepped by the order the windows were first opened, so they don't land on each other.
         newWindow.center()
-        if fuel != .electricity, var origin = newWindow.frame.origin as CGPoint? {
-            origin.x += 28
-            origin.y -= 28
-            newWindow.setFrameOrigin(origin)
-        }
+        var origin = newWindow.frame.origin
+        origin.x += CGFloat(28 * cascade)
+        origin.y -= CGFloat(28 * cascade)
+        newWindow.setFrameOrigin(origin)
 
         let height = statusField.heightAnchor.constraint(equalToConstant: 0)
         height.isActive = true
@@ -213,9 +225,9 @@ final class UsageWindowController: NSObject {
 
     // MARK: - Data
 
-    /// Meter and offset both matter: another meter's week is different data entirely.
+    /// The window's meter never changes, so the week offset is the whole key.
     private func cacheKey(_ weeksBack: Int) -> String {
-        "\(MeterPreference.savedId(fuel) ?? "auto")|\(weeksBack)"
+        "\(weeksBack)"
     }
 
     /// Re-buckets the series already fetched; changing granularity never refetches.
@@ -270,7 +282,7 @@ final class UsageWindowController: NSObject {
             // The week, the meter or the key may all have changed while this was in flight.
             var current: Bool { requestedGeneration == generation && key0 == cacheKey(weeksBack) }
             do {
-                let fetched = try await fetchUsage(apiKey: key, days: 7, weeksBack: requested, fuel: fuel)
+                let fetched = try await fetchUsage(apiKey: key, meter: meter, days: 7, weeksBack: requested)
                 // Another week's data is still worth keeping; another meter's or key's is not.
                 if requestedGeneration == generation {
                     cache[key0] = CachedUsage(

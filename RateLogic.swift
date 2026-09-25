@@ -375,19 +375,23 @@ func menuLines(_ s: Snapshot, now: Date, carbon: [CarbonReading] = []) -> [Line]
     let active = currentInterval(intervals, now: now)
     var lines: [Line] = []
 
+    // The VAT and standing-charge footnote is the subtitle of the line under the heading, the
+    // prices it qualifies. With no such line — standard rate and no cheap window ahead — it
+    // stands alone, still in the subtitle style.
+    var next: String?
     if !s.hasCheapRate {
         lines.append(.header("Single rate · \(pence(s.peakRate))"))
-        lines.append(.text("This tariff has no cheap window"))
+        next = "This tariff has no cheap window"
     } else if let active {
         lines.append(.header("Cheap rate now · \(pence(s.cheapRate))"))
-        lines.append(.text("Back to standard at \(stamp(active.end, now: now, tz)) (\(pence(s.peakRate)))"))
+        next = "Back to standard at \(stamp(active.end, now: now, tz)) (\(pence(s.peakRate)))"
     } else {
         lines.append(.header("Standard rate now · \(pence(s.peakRate))"))
-        if let next = intervals.first {
-            lines.append(.text("Cheap from \(stamp(next.start, now: now, tz)) (\(pence(s.cheapRate)))"))
+        if let upcoming = intervals.first {
+            next = "Cheap from \(stamp(upcoming.start, now: now, tz)) (\(pence(s.cheapRate)))"
         }
     }
-    lines.append(.text(updatedLine(s, tz: tz)))
+    lines.append(.info(next ?? "", detail: updatedLine(s, tz: tz)))
 
     // A single-rate tariff has no windows to list, so the section is skipped rather than shown
     // empty; everything below it still applies.
@@ -423,18 +427,16 @@ func menuLines(_ s: Snapshot, now: Date, carbon: [CarbonReading] = []) -> [Line]
                 if let readyBy = car.readyBy { goal += " by \(clockTime(readyBy))" }
                 title += " (\(goal))"
             }
-            lines.append(.text(title))
+            var details: [String] = []
             // Derived from two figures the API does give, so "about": the state of charge arrives
             // rounded, and a percent of a 49 kWh battery is half a kilowatt-hour.
             if let capacity = car.batteryKwh, capacity > 0 {
-                lines.append(
-                    .text(
-                        String(
-                            format: "    About %.1f of %.1f kWh in the battery",
-                            capacity * soc / 100, capacity)))
+                details.append(
+                    String(format: "About %.1f of %.1f kWh in the battery", capacity * soc / 100, capacity))
             }
-            if let status = chargingStatus(car, now: now) { lines.append(.text("    " + status)) }
-            if let asOf = car.asOf { lines.append(.text("    Charge level as of \(stamp(asOf, now: now, tz))")) }
+            if let status = chargingStatus(car, now: now) { details.append(status) }
+            if let asOf = car.asOf { details.append("Charge level as of \(stamp(asOf, now: now, tz))") }
+            lines.append(titled(title, details))
         } else {
             lines.append(.text("\(car.name): no charge level reported"))
         }
@@ -445,15 +447,17 @@ func menuLines(_ s: Snapshot, now: Date, carbon: [CarbonReading] = []) -> [Line]
     return lines
 }
 
-/// The carbon intensity now, and when it is next green — at or under the 100 gCO₂/kWh line the
-/// icon's leaf uses. Absent until the forecast has loaded, rather than a heading with nothing under it.
+/// The carbon intensity now, as the item that opens the carbon window, with when it is next green —
+/// at or under the 100 gCO₂/kWh line the icon's leaf uses — as its subtitle. Until the forecast has
+/// loaded, a plain "Carbon Intensity…" item in its place.
 ///
 /// No "cleanest half hour" here: that is the carbon window's job, and the menu stays short.
 func carbonLines(_ readings: [CarbonReading], now: Date, tz: TimeZone) -> [Line] {
     let ahead = readings.filter { $0.end > now }.sorted { $0.start < $1.start }
-    guard let current = ahead.first(where: { $0.start <= now }) else { return [] }
-    var lines: [Line] = [.separator, .header("Carbon intensity")]
-    lines.append(.text("Now \(formatGrams(current.grams)) · \(current.index.title.lowercased())"))
+    // The window is always reachable, forecast or not: it says for itself what is missing.
+    guard let current = ahead.first(where: { $0.start <= now }) else {
+        return [.separator, .header("Carbon intensity"), .action("Carbon Intensity…", .carbon)]
+    }
 
     // The run of green half hours containing, or next after, now — joined while they are contiguous.
     func greenRun(from index: Int) -> (start: Date, end: Date) {
@@ -470,29 +474,36 @@ func carbonLines(_ readings: [CarbonReading], now: Date, tz: TimeZone) -> [Line]
         // Green to the end of the forecast is not the same as green until then.
         end >= horizon ? "for as far as the forecast goes" : "until \(stamp(end, now: now, tz))"
     }
+    let green: String
     if carbonIsLow(current.grams), let index = ahead.firstIndex(of: current) {
-        lines.append(.text("Green (≤100 g) \(until(greenRun(from: index).end))"))
+        green = "Green (≤100 g) \(until(greenRun(from: index).end))"
     } else if let index = ahead.firstIndex(where: { $0.start > now && carbonIsLow($0.grams) }) {
         let run = greenRun(from: index)
         let sameDay = calendar(tz).isDate(run.start, inSameDayAs: run.end)
         let to = sameDay ? formatted(run.end, "HH:mm", tz) : stamp(run.end, now: now, tz)
-        lines.append(.text("Next green (≤100 g): \(stamp(run.start, now: now, tz))–\(to)"))
+        green = "Next green (≤100 g): \(stamp(run.start, now: now, tz))–\(to)"
     } else {
         let hours = Int((horizon.timeIntervalSince(now) / 3600).rounded())
-        lines.append(.text("Not green (≤100 g) in the next \(hours) hours"))
+        green = "Not green (≤100 g) in the next \(hours) hours"
     }
-    return lines
+    // Like a tariff line, the figure itself opens the window, with when it is next green under it.
+    return [
+        .separator, .header("Carbon intensity"),
+        .action("Now \(formatGrams(current.grams)) · \(current.index.title.lowercased())", .carbon, detail: green),
+    ]
+}
+
+/// A title with its details under it in the subtitle style, or a plain line when there are none.
+func titled(_ title: String, _ details: [String]) -> Line {
+    details.isEmpty ? .text(title) : .info(title, detail: details.joined(separator: "\n"))
 }
 
 /// The account's money. Absent entirely when no balance came back, so an account with nothing to
 /// say doesn't get an empty heading.
 func accountLines(_ s: Snapshot, now: Date) -> [Line] {
     guard let balance = s.balancePence else { return [] }
-    var lines: [Line] = [.separator, .header("Account"), .text("Balance: \(balanceText(balance))")]
-    if let projected = s.projectedBalancePence {
-        lines.append(.text("    \(balanceText(projected)) expected in a year"))
-    }
-    return lines
+    let projected = s.projectedBalancePence.map { "\(balanceText($0)) expected in a year" }
+    return [.separator, .header("Account"), titled("Balance: \(balanceText(balance))", projected.map { [$0] } ?? [])]
 }
 
 /// Every agreement the account holds, not merely the ones about to expire: a variable tariff
@@ -504,15 +515,22 @@ func tariffLines(_ s: Snapshot, now: Date) -> [Line] {
     for end in s.tariffEnds {
         // The address only earns its place when the account has more than one.
         let at = s.propertyCount > 1 && !end.property.isEmpty ? " at \(end.property)" : ""
-        lines.append(.text("\(end.name) (\(end.fuel.rawValue))\(at)"))
-        guard let ending = end.ends else {
-            lines.append(.text("    No end date"))
-            continue
+        let title = "\(end.name) (\(end.fuel.rawValue))\(at)"
+        var detail = "No end date"
+        if let ending = end.ends {
+            let last = lastCoveredDay(ending, s.tz)
+            let days = daysUntil(last, now: now, s.tz)
+            let when = days <= 0 ? "last day today" : dayCount(days)
+            detail = "Ends \(formatted(last, "EEE d MMM", s.tz)) · \(when)"
         }
-        let last = lastCoveredDay(ending, s.tz)
-        let days = daysUntil(last, now: now, s.tz)
-        let when = days <= 0 ? "last day today" : dayCount(days)
-        lines.append(.text("    Ends \(formatted(last, "EEE d MMM", s.tz)) · \(when)"))
+        // The tariff line itself opens its meter's usage, so a two-property account gets one per
+        // address with no separate "Electricity Use…" item to match up. An export meter has no
+        // usage, so its tariff stays plain text.
+        if let meter = end.meter {
+            lines.append(.action(title, .usage(meter), detail: detail))
+        } else {
+            lines.append(.info(title, detail: detail))
+        }
     }
     return lines
 }

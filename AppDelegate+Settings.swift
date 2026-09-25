@@ -38,27 +38,20 @@ extension AppDelegate {
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
 
-        let meterHeading = NSTextField(labelWithString: "Meters")
+        // One choice left: which electricity meter the menu bar and carbon intensity follow. Usage
+        // windows are per meter and open from the menu, so gas no longer needs choosing at all.
+        let meterHeading = NSTextField(labelWithString: "Meter")
         meterHeading.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        var meterRows: [NSView] = [meterHeading]
-        for fuel in Fuel.allCases {
-            let picker = NSPopUpButton()
-            picker.target = self
-            picker.action = #selector(meterChanged(_:))
-            picker.addItem(withTitle: "Loading…")
-            picker.isEnabled = false
-            // The tag carries the fuel, so one action serves both pickers.
-            picker.tag = Fuel.allCases.firstIndex(of: fuel) ?? 0
-            meterPickers[fuel] = picker
-            let caption = NSTextField(labelWithString: fuel.title)
-            caption.font = .systemFont(ofSize: 11)
-            caption.textColor = .secondaryLabelColor
-            caption.translatesAutoresizingMaskIntoConstraints = false
-            caption.widthAnchor.constraint(equalToConstant: 70).isActive = true
-            let row = NSStackView(views: [caption, picker])
-            row.spacing = 8
-            meterRows.append(row)
-        }
+        let caption = NSTextField(labelWithString: "Menu bar and carbon intensity follow:")
+        caption.font = .systemFont(ofSize: 11)
+        caption.textColor = .secondaryLabelColor
+        let picker = NSPopUpButton()
+        picker.target = self
+        picker.action = #selector(meterChanged(_:))
+        picker.addItem(withTitle: "Loading…")
+        picker.isEnabled = false
+        meterPicker = picker
+        let meterRows: [NSView] = [meterHeading, caption, picker]
 
         let check = NSButton(
             checkboxWithTitle: "Alert 10 minutes before the rate changes", target: self,
@@ -82,7 +75,8 @@ extension AppDelegate {
         stack.alignment = .leading
         stack.spacing = 10
         stack.setCustomSpacing(20, after: status)
-        if let last = meterRows.last { stack.setCustomSpacing(20, after: last) }
+        stack.setCustomSpacing(4, after: caption)
+        stack.setCustomSpacing(20, after: picker)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         // Pin the stack inside a container so the 20pt margin holds on every side.
@@ -115,43 +109,37 @@ extension AppDelegate {
         removeButton = remove
     }
 
-    /// Lists every import meter on the account so a multi-property account isn't guessed at.
+    /// Lists every electricity import meter on the account so a multi-property account isn't
+    /// guessed at.
     func refreshMeterPicker() {
-        for (fuel, picker) in meterPickers {
-            let forFuel = meterChoices.filter { $0.fuel == fuel }
-            picker.removeAllItems()
-            guard !forFuel.isEmpty else {
-                picker.addItem(
-                    withTitle: apiKey == nil
-                        ? "Add an API key first" : meterChoices.isEmpty ? "Loading…" : "None on this account")
-                picker.isEnabled = false
-                continue
-            }
-            for choice in forFuel { picker.addItem(withTitle: choice.label) }
-            picker.isEnabled = forFuel.count > 1
-            if let current = MeterPreference.resolve(from: meterChoices, fuel: fuel),
-                let index = forFuel.firstIndex(of: current)
-            {
-                picker.selectItem(at: index)
-            }
+        guard let picker = meterPicker else { return }
+        let electricity = meterChoices.filter { $0.fuel == .electricity }
+        picker.removeAllItems()
+        guard !electricity.isEmpty else {
+            picker.addItem(
+                withTitle: apiKey == nil
+                    ? "Add an API key first" : meterChoices.isEmpty ? "Loading…" : "None on this account")
+            picker.isEnabled = false
+            return
+        }
+        for choice in electricity { picker.addItem(withTitle: choice.label) }
+        picker.isEnabled = electricity.count > 1
+        if let current = MeterPreference.resolve(from: meterChoices, fuel: .electricity),
+            let index = electricity.firstIndex(of: current)
+        {
+            picker.selectItem(at: index)
         }
     }
 
     @objc func meterChanged(_ sender: NSPopUpButton) {
-        let fuel = Fuel.allCases.indices.contains(sender.tag) ? Fuel.allCases[sender.tag] : .electricity
-        let forFuel = meterChoices.filter { $0.fuel == fuel }
+        let electricity = meterChoices.filter { $0.fuel == .electricity }
         let index = sender.indexOfSelectedItem
-        guard index >= 0, index < forFuel.count else { return }
-        MeterPreference.save(forFuel[index])
-        // Only this fuel's window is affected; the other meter is unchanged.
-        usageControllers[fuel]?.resetForMeterChange()
-        // The menu bar rate follows the electricity meter, so only that one restarts it. Carbon
-        // intensity is regional and follows the same choice's postcode.
-        if fuel == .electricity {
-            invalidateSnapshot()
-            carbonController.resetForMeterChange()
-            refresh(manual: true)
-        }
+        guard index >= 0, index < electricity.count else { return }
+        MeterPreference.save(electricity[index])
+        // The menu bar rate follows this meter, and carbon intensity its postcode.
+        invalidateSnapshot()
+        carbonController.resetForMeterChange()
+        refresh(manual: true)
     }
 
     /// Also called at launch, before the Settings window exists: the menu needs to know which
@@ -220,7 +208,7 @@ extension AppDelegate {
         // Everything fetched belonged to that key: the account's meters, and each window's data.
         meterChoices = []
         refreshMeterPicker()
-        for controller in usageControllers.values { controller.resetForMeterChange() }
+        closeUsageWindows()
         carbonController.resetForMeterChange()
         Task { await OctopusSession.shared.invalidate() }
         removeButton?.isEnabled = false
@@ -253,7 +241,7 @@ extension AppDelegate {
         invalidateSnapshot()
         lastError = nil
         meterChoices = []
-        for controller in usageControllers.values { controller.resetForMeterChange() }
+        closeUsageWindows()
         // Another key may be another account, with another postcode.
         carbonController.resetForMeterChange()
         refresh(manual: true)

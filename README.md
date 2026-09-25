@@ -68,8 +68,10 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   altogether — and one as a fixed tariff nears its end, at 30 days, 14, 7 and the day before.
   Octopus nudges dispatches by a minute or two constantly, and those are ignored. All three can be
   turned off in Settings.
-- **Electricity Use… / Gas Use…:** a week of use as stacked columns.
-- **Carbon Intensity…:** how clean the grid is where you live, half hour by half hour.
+- **Usage:** click a tariff in the Tariffs section to open that meter's week of use as stacked
+  columns, one window per meter.
+- **Carbon intensity:** click the current figure in the menu's carbon intensity section to open
+  how clean the grid is where you live, half hour by half hour.
 
 ### Starting at login
 
@@ -180,10 +182,8 @@ only the outward part of it is sent.
 ### Multiple properties and meters
 
 Meters are matched to the property they actually sit at, and only those with an active agreement
-are offered. If you have more than one of a fuel, **Settings** has a picker per fuel and remembers
-your choice. The electricity choice also drives the menu bar rate.
-
-A usage window is only listed for a fuel you have a meter for.
+are offered. Every meter's tariff opens its own usage window, titled with the address. If you have more than one electricity meter, **Settings** chooses which one
+drives the menu bar rate and the carbon intensity postcode.
 
 ### Command-line scripts
 

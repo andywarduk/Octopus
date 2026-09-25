@@ -44,6 +44,9 @@ struct TariffEnd: Equatable {
     var ends: Date?
     /// Short address of the property it covers.
     var property: String = ""
+    /// The meter it supplies, when that meter has usage to show: nil for an export meter, and
+    /// when the listing didn't name the supply point.
+    var meter: MeterChoice?
 
     /// What an alert is about. Deliberately excludes the property: the same tariff ending the
     /// same day at two addresses is one thing to be told about, even though the list shows both.
@@ -84,4 +87,16 @@ enum Line {
     case header(String)
     case text(String)
     case separator
+    /// A line with its details under it in the subtitle style — the non-clickable counterpart of an
+    /// action's subtitle. `detail` may hold several lines, separated by newlines.
+    case info(String, detail: String)
+    /// A clickable item that opens a window, placed beside the information it belongs to. `detail`
+    /// is a secondary line under it — the item's subtitle where macOS supports one.
+    case action(String, MenuAction, detail: String? = nil)
+}
+
+/// What an action line opens.
+enum MenuAction: Equatable {
+    case usage(MeterChoice)
+    case carbon
 }

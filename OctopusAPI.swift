@@ -145,7 +145,7 @@ let fallbackWindows = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
 /// the very tariff the menu bar's prices come from, so leaving it out made the menu silent about
 /// it. Two houses on the same tariff stay two entries: the list is what the account holds. Takes
 /// the raw `account` node so it can be exercised without the network.
-func parseTariffEnds(_ account: [String: Any], now: Date) -> [TariffEnd] {
+func parseTariffEnds(_ account: [String: Any], accountNumber: String = "", now: Date) -> [TariffEnd] {
     var found: [TariffEnd] = []
     for property in (account["properties"] as? [[String: Any]]) ?? [] {
         // The first line of the address, as the meter picker shows it.
@@ -154,6 +154,17 @@ func parseTariffEnds(_ account: [String: Any], now: Date) -> [TariffEnd] {
             .trimmingCharacters(in: .whitespaces) ?? ""
         for (field, fuel) in [("electricityMeterPoints", Fuel.electricity), ("gasMeterPoints", .gas)] {
             for point in (property[field] as? [[String: Any]]) ?? [] {
+                // The meter behind the agreement, so the menu can open its usage from the tariff
+                // it sits under — without waiting on meter discovery. Export has no usage to show.
+                let supplyPoint = (point["mpan"] ?? point["mprn"]) as? String
+                let isExport = (point["direction"] as? String)?.uppercased() == "EXPORT"
+                let meter = supplyPoint.flatMap { supply -> MeterChoice? in
+                    guard !isExport, let propertyId = property["id"] as? String else { return nil }
+                    return MeterChoice(
+                        fuel: fuel, accountNumber: accountNumber, propertyId: propertyId,
+                        address: address, postcode: property["postcode"] as? String ?? "",
+                        supplyPoint: supply)
+                }
                 for agreement in (point["agreements"] as? [[String: Any]]) ?? [] {
                     let ends = parseDate(agreement["validTo"])
                     guard
@@ -167,7 +178,7 @@ func parseTariffEnds(_ account: [String: Any], now: Date) -> [TariffEnd] {
                     found.append(
                         TariffEnd(
                             fuel: fuel, name: name ?? "\(fuel.title) tariff", ends: ends,
-                            property: place))
+                            property: place, meter: meter))
                 }
             }
         }
@@ -276,7 +287,7 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
         standingCharge: toDouble(tariff["standingCharge"]), windows: windows, tz: tz,
         balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
         projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
-        tariffEnds: parseTariffEnds(accountNode, now: now),
+        tariffEnds: parseTariffEnds(accountNode, accountNumber: account, now: now),
         propertyCount: propertyCount(accountNode), fetched: now)
 }
 
@@ -419,10 +430,13 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
               properties{
                 id
                 address
+                postcode
                 electricityMeterPoints{
+                  mpan direction
                   agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
                 }
                 gasMeterPoints{
+                  mprn
                   agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
                 }
               }
