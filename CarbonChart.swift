@@ -272,29 +272,6 @@ final class CarbonChartView: NSView {
                 ).fill()
             }
 
-            // A half hour the grid operator has published an impossible mix for. The same glitch
-            // takes its intensity down with it, so it is greyed in both views rather than drawn
-            // as though it were data. Not corrected — the number is theirs, not ours to mend.
-            if reading.suspectMix {
-                if mode == .mix, scaledToDemand, let demand = reading.demandMW {
-                    // Demand is sound — only the split inside it is not — so the bar keeps its
-                    // real height and loses only its colours.
-                    let height = max(2, CGFloat(demand / axisMax) * plot.height)
-                    NSColor.tertiaryLabelColor.withAlphaComponent(0.45).setFill()
-                    NSBezierPath(rect: CGRect(x: edge, y: plot.minY, width: width, height: height))
-                        .fill()
-                } else {
-                    // The same glitch takes the intensity down with it, so there is no height
-                    // worth drawing. A faint full-height band marks the column as excluded —
-                    // plotting its 8 gCO₂ would be repeating the bad number, and a short bar
-                    // would read as a gap in the data rather than a reading not to be trusted.
-                    NSColor.tertiaryLabelColor.withAlphaComponent(0.18).setFill()
-                    NSBezierPath(rect: CGRect(x: edge, y: plot.minY, width: width, height: plot.height))
-                        .fill()
-                }
-                continue
-            }
-
             switch mode {
             case .intensity:
                 let height = max(1, CGFloat(reading.grams / axisMax) * plot.height)
@@ -311,8 +288,7 @@ final class CarbonChartView: NSView {
                 if scaledToDemand {
                     guard let demand = reading.demandMW else {
                         // No demand for this half hour. A bare baseline dash reads as damage in a
-                        // chart this dense, so the whole column is faintly banded as well — the
-                        // same "nothing to draw here" mark the suspect columns use.
+                        // chart this dense, so the whole column is faintly banded instead.
                         NSColor.tertiaryLabelColor.withAlphaComponent(0.12).setFill()
                         NSBezierPath(rect: CGRect(x: edge, y: plot.minY, width: width, height: plot.height))
                             .fill()
@@ -455,13 +431,6 @@ final class CarbonChartView: NSView {
                         ? "GB demand is published when this half hour ends"
                         : "GB demand not forecast this far ahead"))
         }
-        if reading.suspectMix, let solar = reading.impliedSolarMW {
-            lines.append(
-                TooltipLine(
-                    "Published mix looks wrong: \(formatPower(solar)) of solar,",
-                    NSColor.tertiaryLabelColor.withAlphaComponent(0.45)))
-            lines.append(TooltipLine("more than GB can generate. Shown greyed."))
-        }
         // The mix is what makes a number mean something; Octopus doesn't supply it. Largest share
         // first here, unlike the stack — reading a tooltip, the biggest contributor is the point.
         let ranked = reading.mix.sorted { $0.percent > $1.percent }
@@ -549,7 +518,7 @@ func sampleCarbonForecast(from start: Date) -> [CarbonReading] {
         // last eight hours are left nil, standing in for the edge of the day-ahead forecast.
         let demand = 27_000 - 7_000 * cos((hour24 - 18) / 24 * 2 * .pi) + Double(generator.next() % 600)
         let from = start.addingTimeInterval(Double(slot) * 1800)
-        var reading = CarbonReading(
+        let reading = CarbonReading(
             start: from, end: from.addingTimeInterval(1800), grams: (grams).rounded(),
             index: index, mix: mix,
             // Slot 6 is the half hour in progress, covered by neither the settled outturn nor
@@ -557,18 +526,6 @@ func sampleCarbonForecast(from start: Date) -> [CarbonReading] {
             // gaps are real shapes the live data takes, so the demo renders both.
             demandMW: (slot == 6 || slot >= 80) ? nil : demand.rounded(),
             mixIsNational: slot < 48)
-        // One sunrise glitch, as the real forecast produces: impossible solar and an intensity
-        // to match. Included so the greying is exercised by --chartdemo.
-        if slot == 26 {
-            reading.grams = 8
-            reading.index = .veryLow
-            reading.mix = [
-                FuelShare(fuel: .gas, percent: 2.2), FuelShare(fuel: .imports, percent: 1.5),
-                FuelShare(fuel: .biomass, percent: 0.3), FuelShare(fuel: .nuclear, percent: 7.9),
-                FuelShare(fuel: .wind, percent: 3.5), FuelShare(fuel: .solar, percent: 84.5),
-            ]
-        }
-        reading.suspectMix = mixLooksImplausible(reading)
         return reading
     }
 }

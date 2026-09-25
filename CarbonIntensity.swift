@@ -111,17 +111,6 @@ struct CarbonReading: Equatable {
     /// multiplied by GB demand to give real megawatts per fuel; the regional one is a proportion
     /// at national scale, which is a weaker claim and has to be labelled as such.
     var mixIsNational = false
-    /// The published mix for this half hour is physically impossible — see `impliedSolarMW`.
-    /// Drawn greyed rather than corrected: the number is the grid operator's, not ours to mend.
-    var suspectMix = false
-
-    /// Solar output the published mix implies, in MW, or nil when demand isn't known.
-    var impliedSolarMW: Double? {
-        guard let demandMW else { return nil }
-        let total = mix.reduce(0) { $0 + $1.percent }
-        guard total > 0, let solar = mix.first(where: { $0.fuel == .solar })?.percent else { return nil }
-        return demandMW * solar / total
-    }
 }
 
 /// Why a half hour has no demand against it. The two are not the same thing and must not be
@@ -150,25 +139,6 @@ func demandGap(_ reading: CarbonReading, now: Date) -> DemandGap {
     return reading.start <= now ? .stillRunning : .beyondForecast
 }
 
-/// Above GB's physical solar ceiling. The record output is about 14 GW from roughly 18 GW
-/// installed, so 16 GW leaves headroom over anything real while sitting well under the 19–22 GW
-/// the forecast has been seen to claim.
-let gbSolarCeilingMW: Double = 16_000
-
-/// Whether a published mix is impossible rather than merely surprising.
-///
-/// The carbon intensity forecast misfires around sunrise: on 23 September 2026 it put solar at
-/// 78% and then 84% of generation for the two half hours to 06:00Z — 19.0 GW and 22.5 GW against
-/// a demand of 24.3 and 26.6 GW — with an intensity of 5 and 8 gCO₂/kWh, before snapping back to
-/// 2.2% solar and 203 gCO₂ in the very next period. Both the national and the regional series
-/// carried it, so it is upstream, not a parsing fault.
-///
-/// This is a screening test, not a correction. For a regional mix it multiplies by national
-/// demand, which is not a quantity worth displaying, but is fine for an order-of-magnitude check.
-func mixLooksImplausible(_ reading: CarbonReading) -> Bool {
-    (reading.impliedSolarMW ?? 0) > gbSolarCeilingMW
-}
-
 struct CarbonSeries {
     var source: CarbonSource = .nationalGrid
     var period: CarbonPeriod = .forecast
@@ -191,8 +161,6 @@ struct CarbonSeries {
     /// agree: the footer used to announce "bars are GB demand" while the chart, short of data,
     /// had quietly fallen back to percentages.
     var scaledToDemand: Bool { carbonScaledToDemand(readings) }
-
-    var suspectCount: Int { readings.filter(\.suspectMix).count }
 
     /// How to describe what the mix segments mean. Up to three bases can appear in one window, in
     /// time order: the national mix for half hours already over, the national forecast for the rest
@@ -222,11 +190,9 @@ struct CarbonSeries {
         return now.timeIntervalSince(fetchedAt) < within
     }
 
-    /// The cleanest half hour worth acting on. Implausible readings are excluded: the sunrise
-    /// glitch reports single figures, so without this the footer recommends a bad number as the
-    /// best time to use power — which is the one thing this window is for.
+    /// The cleanest half hour in the window, as the grid operator forecasts it.
     var cleanest: CarbonReading? {
-        readings.filter { !$0.suspectMix }.min { $0.grams < $1.grams }
+        readings.min { $0.grams < $1.grams }
     }
 
     /// The period covering `now`, when the series reaches that far.
@@ -236,17 +202,14 @@ struct CarbonSeries {
 }
 
 /// Mean share per fuel over a window, for the legend and the footer alike so they can never
-/// disagree. Implausible half hours are skipped, divisor included, or one bad sunrise drags the
-/// whole window's solar figure up with it — and the fossil figure down. Fuels that never appear
-/// are absent rather than zero.
+/// disagree. Fuels that never appear are absent rather than zero.
 func averageMix(_ readings: [CarbonReading]) -> [GridFuel: Double] {
-    let usable = readings.filter { !$0.suspectMix }
-    guard !usable.isEmpty else { return [:] }
+    guard !readings.isEmpty else { return [:] }
     var totals: [GridFuel: Double] = [:]
-    for reading in usable {
+    for reading in readings {
         for share in reading.mix { totals[share.fuel, default: 0] += share.percent }
     }
-    return totals.mapValues { $0 / Double(usable.count) }
+    return totals.mapValues { $0 / Double(readings.count) }
 }
 
 /// Minute-precision UTC stamps, as National Grid and Elexon write them. Built once; DateFormatter
@@ -325,30 +288,9 @@ private func fetchOctopusCarbon(apiKey: String, postcode: String, outward: Strin
         """, ["p": postcode], token: token)
     let rows = ((data["getProjectedRegionalCarbonIntensity"] as? [String: Any])?[
         "projectedRegionalCarbonIntensity"] as? [[String: Any]]) ?? []
-    var readings = parseOctopusCarbon(rows)
+    let readings = parseOctopusCarbon(rows)
     guard !readings.isEmpty else {
         throw ApiError(message: "Octopus returned no carbon intensity for \(outward)", invalidatesSession: false)
-    }
-
-    // Octopus relays the same forecast National Grid publishes, glitches included, but carries no
-    // mix or demand of its own to screen them against. Both of those are national and keyless, so
-    // fetch them here for screening only — a half hour that is implausible is implausible
-    // whichever relay you asked, and greying it in one source but not the other would be absurd.
-    // The national mix is deliberately not assigned to `mix`: this source has none to display,
-    // and pretending otherwise would enable a fuel-mix view Octopus cannot support.
-    if let first = readings.first, let last = readings.last {
-        async let demand = fetchGBDemand(from: first.start, to: last.end)
-        async let national = fetchNationalMix(from: first.start, to: last.end)
-        let (demandBySlot, nationalBySlot) = await (demand, national)
-        readings = readings.map { reading in
-            var updated = reading
-            let key = Int(reading.start.timeIntervalSince1970 / 1800)
-            var screening = reading
-            screening.demandMW = demandBySlot[key]
-            screening.mix = nationalBySlot[key] ?? []
-            updated.suspectMix = mixLooksImplausible(screening)
-            return updated
-        }
     }
 
     return CarbonSeries(
@@ -456,7 +398,6 @@ private func fetchNationalGridCarbon(
                 updated.mix = shares
                 updated.mixIsNational = true
             }
-            updated.suspectMix = mixLooksImplausible(updated)
             return updated
         }
     }

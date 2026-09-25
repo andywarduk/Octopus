@@ -448,9 +448,7 @@ func menuLines(_ s: Snapshot, now: Date, carbon: [CarbonReading] = []) -> [Line]
 /// The carbon intensity now, and when it is next green — at or under the 100 gCO₂/kWh line the
 /// icon's leaf uses. Absent until the forecast has loaded, rather than a heading with nothing under it.
 ///
-/// Deliberately no "cleanest half hour": these readings are the icon's single keyless request, with
-/// no demand to screen the sunrise glitch against, so it could nominate a bogus 5 gCO₂/kWh. The
-/// carbon window, which does screen, is where to look for that.
+/// No "cleanest half hour" here: that is the carbon window's job, and the menu stays short.
 func carbonLines(_ readings: [CarbonReading], now: Date, tz: TimeZone) -> [Line] {
     let ahead = readings.filter { $0.end > now }.sorted { $0.start < $1.start }
     guard let current = ahead.first(where: { $0.start <= now }) else { return [] }

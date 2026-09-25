@@ -60,7 +60,7 @@ keep its output free of the clock — a stray `Date()` in anything printed makes
 go stale overnight. It currently covers charging-status wording, band assignment and thresholds (including a single-rate
 tariff), both reading shapes, unpublished days, zero-usage days, week windows, cache freshness,
 axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge goal, balance
-wording, carbon parsing and its plausibility screening, the mix basis wording and mean mix, the
+wording, carbon parsing, cleanest and the mean mix, the mix basis wording and mean mix, the
 dispatch alert cooldown, a failed device query, the refresh split and its queries, page sizes and completeness across a clock change,
 tariff-end wording, login-item wording, and the menu text at three moments.
 
@@ -405,28 +405,17 @@ against real data. Treat those paths as unverified.
   the two half hours to 06:00Z carried solar at 78% and 84% of generation — 19.0 GW and 22.5 GW
   against demand of 24.3 and 26.6 GW — with an intensity of 5 and 8 gCO₂/kWh, before snapping
   back to 2.2% solar and 203 gCO₂ in the next period. Both the national and the regional series
-  carried it, so it is not a parsing fault. `mixLooksImplausible` screens for it against a 16 GW
-  solar ceiling (GB's record is about 14 GW from roughly 18 GW installed). Such half hours are
-  **greyed, never corrected** — the number belongs to the grid operator. They are also excluded
-  from the legend's averages, since one bad sunrise drags a whole window's solar figure up.
-  In the mix view the bar keeps its real height, because demand is sound and only the split is
-  not; in the intensity view the whole column is a faint band, because the glitch takes the
-  intensity with it and plotting 8 gCO₂ would just repeat the bad number.
-- **Screening runs on the Octopus source too, using national data it does not carry.** Octopus
-  relays the same regional forecast — compared half hour by half hour against
-  `api.carbonintensity.org.uk`, the two series match — so it inherits the same glitches while
-  having no mix or demand to test them against. Demand and the national mix are therefore
-  fetched for the Octopus path as well, for **screening only**: the national mix is deliberately
-  not assigned to `mix`, or the fuel-mix view would switch itself on for a source that has none.
-- **`cleanest` excludes suspect readings.** Without that the footer nominates the sunrise glitch —
-  5 gCO₂/kWh — as the best time to use power, which is the single most actionable thing this
-  window says. Covered by `--selftest`.
+  carried it, so it is not a parsing fault. **It is shown as published.** A screen against a 16 GW
+  solar ceiling (`mixLooksImplausible`) used to grey such half hours, keep them out of the
+  averages and out of `cleanest`, and fetched demand and the national mix on the Octopus source
+  purely to run it; all of that was removed. So `cleanest` and the legend's averages take every
+  half hour as the operator publishes it, and a misfire can be named the cleanest time.
 - **The 100 gCO₂/kWh rule is drawn over the columns, not behind them.** At half-hourly width the
   bars are a solid wall and a rule behind them is invisible for most of the chart. It appears on
   the intensity view only — it means nothing against a demand or percentage axis — and only when
   the axis actually reaches it. The threshold is Octopus's own published green/not-so-green line,
   which is why it earns a rule when an invented spike threshold would not.
-- **Not every forecast oddity is screened.** The same series put 284 and 276 gCO₂ either side of
+- **Forecast oddities are left alone.** The same series put 284 and 276 gCO₂ either side of
   half hours reading 52 and 51, and an isolated 197 between 51 and 49 — swings the grid cannot
   physically make. These are left alone: catching them needs a spike heuristic with a threshold
   nobody can justify from physics, and suppressing real variation is worse than showing a rough
@@ -494,13 +483,10 @@ against real data. Treat those paths as unverified.
 - **The icon's carbon comes from one keyless request every half hour** (`fetchRegionalReadings`,
   National Grid's regional forecast for the selected meter's postcode), not the carbon window's
   full fetch with its demand and national-mix calls. A failed refresh keeps the last forecast
-  until it runs out, since it covers 48 hours. It is **not screened for the sunrise glitch**:
-  screening needs GB demand, and the half hour in progress never has any (see `DemandGap`), so a
-  misfire like 23 September's 5 gCO₂ would show a leaf for that half hour. Left alone rather than
-  papered over with a solar-share heuristic nobody can justify. The menu's carbon section
-  (`carbonLines`) works from the same readings, so it says when the grid is next green but
-  **deliberately names no "cleanest half hour"**: unscreened, that would nominate the glitch, which
-  is exactly what `CarbonSeries.cleanest` exists to prevent in the window.
+  until it runs out, since it covers 48 hours. A sunrise misfire like 23 September's 5 gCO₂ shows a
+  leaf for that half hour, as it does everywhere else. The menu's carbon section (`carbonLines`)
+  works from the same readings and says when the grid is next green; it names no "cleanest half
+  hour", which is the carbon window's job.
 - **Menu order is current rate, upcoming cheap rate, carbon intensity, cars, account, tariffs**,
   then the action
   items: Electricity Use…, Gas Use…, Refresh Now, Settings…, Quit. The informational sections come

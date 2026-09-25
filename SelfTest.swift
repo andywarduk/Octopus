@@ -514,30 +514,6 @@ func selfTest() {
         print("      \(label.padding(toLength: 36, withPad: " ", startingAt: 0)): "
             + "\(series.mixBasis), hasDemand=\(series.hasDemand)")
     }
-    // The real glitch of 23 September 2026 and the sound half hours either side of it.
-    print("    implausible mix screening (real values):")
-    for (label, solar, gas, demand) in [
-        ("05:30Z  78.3% solar", 78.3, 4.4, 24_277.0),
-        ("06:00Z  84.5% solar", 84.5, 2.2, 26_645.0),
-        ("06:30Z   2.2% solar", 2.2, 32.7, 27_400.0),
-        ("midsummer noon, 30% of a low demand", 30.0, 20.0, 24_000.0),
-        ("no demand known", 84.5, 2.2, -1.0),
-    ] as [(String, Double, Double, Double)] {
-        let reading = CarbonReading(
-            start: date("2026-09-23T05:30:00Z"), end: date("2026-09-23T06:00:00Z"), grams: 8,
-            index: .veryLow,
-            mix: [
-                FuelShare(fuel: .gas, percent: gas), FuelShare(fuel: .solar, percent: solar),
-                FuelShare(fuel: .wind, percent: 100 - gas - solar),
-            ],
-            demandMW: demand < 0 ? nil : demand)
-        let implied = reading.impliedSolarMW.map { String(format: "%.1f GW", $0 / 1000) } ?? "unknown"
-        print("      \(label.padding(toLength: 36, withPad: " ", startingAt: 0)): implied solar "
-            + "\(implied.padding(toLength: 9, withPad: " ", startingAt: 0)) -> "
-            + (mixLooksImplausible(reading) ? "SUSPECT" : "ok"))
-    }
-    print("      ceiling \(Int(gbSolarCeilingMW / 1000)) GW, against a GB record near 14 GW")
-
     // Elexon publishes settled demand when a half hour ends, and drops it from the day-ahead
     // forecast once it starts, so the period in progress is briefly covered by neither. That is
     // not the same as running off the end of the forecast, and must not be described as if it is.
@@ -557,37 +533,29 @@ func selfTest() {
             + "\(demandGap(reading, now: atNow))")
     }
 
-    // The cleanest half hour is what the footer recommends acting on, so a glitched reading must
-    // never win it — the sunrise misfire reports single figures.
-    print("    cleanest excludes implausible readings:")
-    var withGlitch: [CarbonReading] = []
-    for (position, grams) in [52.0, 284, 5, 49, 37].enumerated() {
-        let from = date("2026-09-22T20:00:00Z").addingTimeInterval(Double(position) * 1800)
-        withGlitch.append(
-            CarbonReading(
-                start: from, end: from.addingTimeInterval(1800), grams: grams,
-                index: grams < 50 ? .veryLow : .high, mix: [], demandMW: 26_000,
-                // The 5 gCO₂ reading is the sunrise glitch.
-                suspectMix: grams == 5))
+    // The cleanest half hour is what the footer recommends acting on.
+    print("    cleanest:")
+    let evening = [52.0, 284, 5, 49, 37].enumerated().map { position, grams in
+        CarbonReading(
+            start: date("2026-09-22T20:00:00Z").addingTimeInterval(Double(position) * 1800),
+            end: date("2026-09-22T20:30:00Z").addingTimeInterval(Double(position) * 1800), grams: grams,
+            index: grams < 50 ? .veryLow : .high)
     }
-    let glitched = CarbonSeries(
-        source: .octopus, outward: "SN13", readings: withGlitch, fetchedAt: Date())
-    print("      values \(withGlitch.map { Int($0.grams) }) -> cleanest "
-        + "\(glitched.cleanest.map { formatGrams($0.grams) } ?? "none"), "
-        + "\(glitched.suspectCount) suspect")
+    let eveningSeries = CarbonSeries(source: .octopus, outward: "SN13", readings: evening, fetchedAt: Date())
+    print("      values \(evening.map { Int($0.grams) }) -> cleanest "
+        + "\(eveningSeries.cleanest.map { formatGrams($0.grams) } ?? "none")")
 
-    print("    mean mix skips implausible half hours:")
-    let sunrise = [40.0, 40, 2, 40].enumerated().map { position, gas in
+    // The legend's and the footer's averages: every half hour counts, and so does the divisor.
+    print("    mean mix:")
+    let morning = [40.0, 40, 2, 40].enumerated().map { position, gas in
         CarbonReading(
             start: date("2026-09-23T04:30:00Z").addingTimeInterval(Double(position) * 1800),
             end: date("2026-09-23T05:00:00Z").addingTimeInterval(Double(position) * 1800), grams: 150,
             index: .moderate,
-            mix: [FuelShare(fuel: .gas, percent: gas), FuelShare(fuel: .solar, percent: 100 - gas)],
-            suspectMix: gas == 2)
+            mix: [FuelShare(fuel: .gas, percent: gas), FuelShare(fuel: .solar, percent: 100 - gas)])
     }
-    let means = averageMix(sunrise)
-    print(String(format: "      gas %.1f%%, solar %.1f%% (with the glitch counted: gas %.1f%%)",
-        means[.gas] ?? 0, means[.solar] ?? 0, sunrise.reduce(0) { $0 + ($1.mix.first?.percent ?? 0) } / 4))
+    let means = averageMix(morning)
+    print(String(format: "      gas %.1f%%, solar %.1f%%", means[.gas] ?? 0, means[.solar] ?? 0))
 
     print("    power formatting: "
         + [30_634.0, 21_800, 1_050, 0].map { formatPower($0) }.joined(separator: ", "))

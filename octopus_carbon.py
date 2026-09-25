@@ -29,9 +29,6 @@ LONDON = ZoneInfo("Europe/London")
 
 # Octopus's own published line between green and not-so-green.
 GREEN_THRESHOLD = 100
-# Above GB's physical solar ceiling: the record is about 14 GW from roughly 18 GW installed.
-# The intensity forecast misfires around sunrise and reports far more than the country can make.
-SOLAR_CEILING_MW = 16_000
 # Stack order, dirtiest first, matching the app.
 FUELS = ["other", "gas", "coal", "imports", "biomass", "nuclear", "hydro", "wind", "solar"]
 
@@ -270,14 +267,6 @@ def fetch_demand(start, end):
     return demand
 
 
-def implied_solar(row):
-    if row.get("demand") is None or not row["mix"]:
-        return None
-    total = sum(percent for _, percent in row["mix"])
-    solar = dict(row["mix"]).get("solar", 0)
-    return row["demand"] * solar / total if total else None
-
-
 def bar(value, top, width=34):
     filled = 0 if top <= 0 else max(0, min(width, round(width * value / top)))
     return "█" * filled + "·" * (width - filled)
@@ -325,24 +314,18 @@ def main():
     if not rows:
         sys.exit("No readings returned")
 
-    # Demand and the national mix are national and keyless, so they are fetched whichever relay
-    # supplied the intensity — a half hour that is implausible is implausible either way.
+    # GB demand is national and keyless, so it is shown whichever relay supplied the intensity.
+    # The national mix only replaces a National Grid regional one: Octopus reports no mix at all.
     span = (rows[0]["start"], rows[-1]["start"] + dt.timedelta(minutes=30))
     demand = fetch_demand(*span)
-    national = fetch_national_mix(*span)
+    national = fetch_national_mix(*span) if args.source == "national" else {}
     for row in rows:
         slot = slot_key(row["start"])
         row["demand"] = demand.get(slot)
         if national.get(slot):
             # Only the national split can be multiplied by GB demand to mean megawatts.
-            row["mix"] = national[slot] if args.source == "national" else row["mix"]
-            row["screen_mix"] = national[slot]
-            row["national_mix"] = args.source == "national"
-        else:
-            row["screen_mix"] = row["mix"]
-        screen = {"demand": row["demand"], "mix": row["screen_mix"]}
-        solar = implied_solar(screen)
-        row["suspect"] = solar is not None and solar > SOLAR_CEILING_MW
+            row["mix"] = national[slot]
+            row["national_mix"] = True
 
     local = dt.timezone(dt.timedelta(hours=0))  # printed in UTC; the APIs report in UTC
     top = max(r["grams"] for r in rows)
@@ -358,9 +341,8 @@ def main():
         if when.date() != day:
             day = when.date()
             print(f"  {when:%a %d %b}")
-        flag = " !" if row["suspect"] else "  "
         line = (f"   {when:%H:%M} {bar(row['grams'], top)} {row['grams']:5.0f}"
-                f" {row['index']:<9}{flag}")
+                f" {row['index']:<9}  ")
         # Always the same width, or the mix column shifts left on the rows without demand.
         line += f" {row['demand'] / 1000:5.1f} GW" if row["demand"] is not None else " " * 9
         if args.mix and row["mix"]:
@@ -375,19 +357,14 @@ def main():
         print(line)
 
     print()
-    usable = [r for r in rows if not r["suspect"]]
-    cleanest = min(usable, key=lambda r: r["grams"], default=None)
-    green = sum(1 for r in usable if r["grams"] < GREEN_THRESHOLD)
+    # As published: the forecast occasionally misfires around sunrise, and such a half hour can be
+    # named the cleanest. The number belongs to the grid operator, as it does in the app.
+    cleanest = min(rows, key=lambda r: r["grams"], default=None)
+    green = sum(1 for r in rows if r["grams"] < GREEN_THRESHOLD)
     print(f"  {len(rows)} half hours · {green} below {GREEN_THRESHOLD} gCO2/kWh")
     if cleanest:
         print(f"  cleanest {cleanest['start'].astimezone(local):%a %H:%M}"
               f" at {cleanest['grams']:.0f} gCO2/kWh")
-    suspect = len(rows) - len(usable)
-    if suspect:
-        # Not corrected: the number belongs to the grid operator. The forecast misfires around
-        # sunrise, reporting more solar than the country can physically generate.
-        print(f"  {suspect} half hour{'s' if suspect > 1 else ''} marked ! — the published mix is"
-              f" impossible, and excluded from the figures above")
     missing = [r for r in rows if r["demand"] is None]
     if missing:
         running = sum(1 for r in missing if r["start"] <= now)

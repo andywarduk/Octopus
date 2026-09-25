@@ -372,7 +372,7 @@ final class CarbonWindowController: NSObject {
             // still summed although Britain burned its last in 2024 and the figure is now always
             // zero: the API still carries the fuel, and naming the total "fossil" rather than
             // listing the fuels means a restart would be counted without a wording change.
-            // The same averages as the legend, so the implausible half hours are left out here too.
+            // The same averages as the legend.
             let mean = averageMix(series.readings)
             let fossil = (mean[.gas] ?? 0) + (mean[.coal] ?? 0)
             parts.append(String(format: "fossil fuels %.0f%% on average", fossil))
@@ -398,11 +398,6 @@ final class CarbonWindowController: NSObject {
                     "bars show shares — GB demand for only \(known) of \(series.readings.count) half hours")
             } else {
                 parts.append("GB demand unavailable — bars show shares")
-            }
-            if series.suspectCount > 0 {
-                parts.append(
-                    "\(series.suspectCount) half hour\(series.suspectCount == 1 ? "" : "s") greyed:"
-                        + " the published mix is impossible")
             }
         } else {
             if let current = series.current() {

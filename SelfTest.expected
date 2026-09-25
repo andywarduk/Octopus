@@ -113,23 +113,16 @@
       national, past then ahead           : mix: GB actual, then GB forecast, hasDemand=true
       all regional, no demand             : mix: South England forecast share, hasDemand=false
       national then regional, part demand : mix: GB actual, then South England forecast share, hasDemand=true
-    implausible mix screening (real values):
-      05:30Z  78.3% solar                 : implied solar 19.0 GW   -> SUSPECT
-      06:00Z  84.5% solar                 : implied solar 22.5 GW   -> SUSPECT
-      06:30Z   2.2% solar                 : implied solar 0.6 GW    -> ok
-      midsummer noon, 30% of a low demand : implied solar 7.2 GW    -> ok
-      no demand known                     : implied solar unknown   -> ok
-      ceiling 16 GW, against a GB record near 14 GW
     demand gaps:
       settled, an hour ago            : none
       just ended, not yet published   : stillRunning
       in progress                     : stillRunning
       forecast, later tonight         : none
       past the forecast horizon       : beyondForecast
-    cleanest excludes implausible readings:
-      values [52, 284, 5, 49, 37] -> cleanest 37 gCO₂/kWh, 1 suspect
-    mean mix skips implausible half hours:
-      gas 40.0%, solar 60.0% (with the glitch counted: gas 30.5%)
+    cleanest:
+      values [52, 284, 5, 49, 37] -> cleanest 5 gCO₂/kWh
+    mean mix:
+      gas 30.5%, solar 69.5%
     power formatting: 30.6 GW, 21.8 GW, 1.1 GW, 0.0 GW
   carbon window navigation:
     back, back, back, forward, forward, forward: week -0 → week -1 → week -2 → week -1 → week -0 → forecast

@@ -164,12 +164,10 @@ published — and there the tooltip gives real gigawatts per fuel. Where only th
 exists, the segments are your region's proportions drawn at national scale and the tooltip drops
 the gigawatt figures. The footer always states which basis is in use.
 
-**Implausible half hours are greyed.** The published forecast occasionally misfires around
-sunrise, reporting solar as most of the country's generation and the grid as almost carbon-free
-for a half hour or two. Anything implying more solar than Britain can physically generate is
-drawn in flat grey and left out of the legend's averages, with the tooltip saying why. The
-figures are not corrected — they belong to the grid operator, and the glitch is in their data
-rather than in this app.
+**Figures are shown as published.** The forecast occasionally misfires around sunrise, reporting
+solar as most of the country's generation and the grid as almost carbon-free for a half hour or
+two. Those half hours are drawn as the grid operator publishes them, and can be named the
+cleanest time; the glitch is in their data rather than in this app.
 
 **Week navigation.** Back and forward a week at a time, the same weeks the usage windows show, so
 the two can be read against each other. Forward from the earliest week returns to the live
@@ -251,8 +249,7 @@ OCTOPUS_API_KEY=sk_live_... python3 octopus_carbon.py --source octopus
   cleanest Thu 13:30 at 67 gCO2/kWh
 ```
 
-Half hours whose published mix is impossible are marked `!` and left out of those figures, as in
-the app.
+Every half hour is shown as published, as in the app, including the occasional sunrise misfire.
 
 ### Known limitations
 
