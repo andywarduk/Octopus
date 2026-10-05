@@ -12,11 +12,15 @@
   CONSUMPTION_CHARGE_ECO7_DAY_H @ 30.37p -> Standard
   CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H @ 6.90p -> Off-peak
   CONSUMPTION_CHARGE_EV_DEVICE_PEAK_H @ 30.37p -> Standard
-  Sat 19 Sep: Standard 1.5kWh @ 30.37p, Off-peak 5.0kWh @ 6.90p  [smart charge]
+  Sat 19 Sep: Standard 1.5kWh @ 30.37p, Off-peak 3.0kWh @ 6.90p, Smart charge 2.0kWh @ 6.90p  [smart charge]
+  01:30 smart charge, off-peak 23:30–05:30: Standard 1.0kWh, Off-peak 3.5kWh
+  01:30 smart charge, off-peak 02:00–06:00: Standard 1.0kWh, Smart charge 3.5kWh
+  13:00 dispatch with no EV bucket, timetabled: Standard 1.0kWh, Off-peak 1.2kWh, Smart charge 3.5kWh — Smart charge 13:00–13:30
+  13:00 dispatch with no EV bucket, no timetable: Standard 1.0kWh, Off-peak 4.7kWh — no smart charge
   flat tariff threshold: none
   flat tariff bands: ["Standard"]
   half hour 00:00–00:30: Off-peak 3.0kWh
-  half hour 13:00–13:30: Standard 1.5kWh + Off-peak 2.0kWh  [smart charge]
+  half hour 13:00–13:30: Standard 1.5kWh + Smart charge 2.0kWh  [smart charge]
   window 18–20 Sep with data only on the 19th -> 3 columns:
     Fri 18 Sep: no data published
     Sat 19 Sep: 6.5 kWh
@@ -27,9 +31,9 @@
     two buckets, both null: nothing parsed
   zero-usage day: hasData true, total 0.0 kWh, standing £0.33
   standing charge as a band:
-    kWh/day         : Standard 1.5, Off-peak 5.0  total 6.5
-    money/day       : Standing charge £0.33, Standard £0.46, Off-peak £0.34  total £1.13
-    money/half hour : Standing charge £0.33, Standard £0.46, Off-peak £0.34  total £1.13
+    kWh/day         : Standard 1.5, Off-peak 3.0, Smart charge 2.0  total 6.5
+    money/day       : Standing charge £0.33, Standard £0.46, Off-peak £0.21, Smart charge £0.14  total £1.13
+    money/half hour : Standing charge £0.33, Standard £0.46, Off-peak £0.21, Smart charge £0.14  total £1.13
   week windows (7 days each):
     0 weeks back: Thu 17 Sep – Wed 23 Sep
     1 weeks back: Thu 10 Sep – Wed 16 Sep

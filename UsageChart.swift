@@ -18,16 +18,15 @@ enum SeriesColor {
     // The standing charge is neutral grey on purpose: it isn't a rate, and no categorical hue
     // separates from blue in dark mode at the bottom of the stack. Grey separates by saturation
     // instead — it fails the palette's chroma floor by design, not by accident. Slot 2 orange
-    // marks a smart charge, which sits under the axis because it isn't a price either.
+    // is the cheap time a smart charge earned outside the off-peak window.
     static let light: [RateBand: NSColor] = [
         .cheap: hexColor("#1baf7a"), .standard: hexColor("#2a78d6"), .standing: hexColor("#8a8a84"),
+        .smart: hexColor("#eb6834"),
     ]
     static let dark: [RateBand: NSColor] = [
         .cheap: hexColor("#199e70"), .standard: hexColor("#3987e5"), .standing: hexColor("#9a9a92"),
+        .smart: hexColor("#d95926"),
     ]
-    static func smart(dark isDark: Bool) -> NSColor {
-        isDark ? hexColor("#d95926") : hexColor("#eb6834")
-    }
 
     static func of(_ band: RateBand, dark isDark: Bool) -> NSColor {
         (isDark ? dark : light)[band] ?? .systemGray
@@ -76,7 +75,7 @@ func formatUsage(
     }
 }
 
-/// Space under the plot for the smart-charge markers, the boundary ticks and the day labels.
+/// Space under the plot for the boundary ticks and the day labels.
 let plotBottomInset: CGFloat = 30
 
 // MARK: - Shared tooltip
@@ -367,11 +366,6 @@ final class UsageChartView: NSView {
                 y += full
             }
 
-            if period.smartCharge {
-                SeriesColor.smart(dark: isDark).setFill()
-                NSBezierPath(rect: CGRect(x: left, y: plot.minY - 6, width: width, height: 3)).fill()
-            }
-
             // Columns carry their value on the cap; the per-band numbers live in the legend
             // and the hover tooltip rather than on every segment.
             if showCaps, period.total(unit) > 0 {
@@ -443,10 +437,6 @@ final class UsageChartView: NSView {
             label(text, at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
             x += 14 + text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width + 16
         }
-        guard periods.contains(where: \.smartCharge) else { return }
-        SeriesColor.smart(dark: isDark).setFill()
-        NSBezierPath(rect: CGRect(x: x, y: y + 4, width: 9, height: 3)).fill()
-        label("Smart charge", at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
     }
 
     private func drawTooltip(for index: Int, plot: CGRect) {
@@ -484,8 +474,9 @@ final class UsageChartView: NSView {
                 "\(RateBand.standing.rawValue): \(formatUsage(standing, .money, withUnit: true))",
                 SeriesColor.of(.standing, dark: isDark)))
         }
+        // No swatch: it lists overnight runs too, whose energy is off-peak green, not smart-charge orange.
         if let smart = smartChargeText(period, granularity: granularity, tz: tz, periods: periods) {
-            lines.append(TooltipLine(smart, SeriesColor.smart(dark: isDark)))
+            lines.append(TooltipLine(smart))
         }
         if period.hasData, period.total(unit, bands) == 0 { lines.append(TooltipLine("No usage")) }
 
@@ -624,7 +615,7 @@ func countHairlines(periods: [UsagePeriod], dark: Bool, size: CGSize) -> Int {
     // blended pixel here is a seam between neighbours rather than the top of a short bar.
     var hairlines = 0
     var columns: Set<Int> = []
-    // Must match the bottom inset in draw(), or the scan lands on the smart-charge markers.
+    // Must match the bottom inset in draw(), or the scan lands below the bars.
     let baselineY = Int(size.height) - Int(plotBottomInset)
     // Skip slots with no data: their "not published" dash is a blend by design, not a seam.
     let plotMinX = 52.0

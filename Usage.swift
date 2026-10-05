@@ -9,12 +9,15 @@ import Foundation
 /// off-peak block on top is easy to compare night to night. Bands are prices, which are real. The tariff's per-device buckets
 /// are NOT a measurement of what each device drew — Octopus allocates a fixed amount to the EV
 /// bucket and the rest of the car's draw lands in the household bucket at the same price — so a
-/// dispatch is flagged on the period instead of being split out as its own band.
+/// dispatch is flagged on the period instead of being split out by bucket.
 enum RateBand: String, CaseIterable {
     /// Not a rate: a fixed daily charge. Sits at the bottom as the base the usage builds on.
     case standing = "Standing charge"
     case standard = "Standard"
     case cheap = "Off-peak"
+    /// Cheap only because a smart charge ran: a dispatch outside the off-peak window. Split by
+    /// time, not bucket, so it is everything used in those half hours, house and car alike.
+    case smart = "Smart charge"
 
     var isConsumption: Bool { self != .standing }
 }
@@ -106,6 +109,9 @@ struct UsageSeries {
     var supportsHalfHour = true
     /// Readings returned, whatever they totalled. A meter that used nothing still reports.
     var readings = 0
+    /// The meter's off-peak timetable, which separates off-peak from smart-charge cheap time.
+    /// Empty when the tariff states none.
+    var offPeakWindows: [(from: Int, to: Int)] = []
 
     /// Zero consumption is data, so emptiness is about readings rather than usage.
     var isEmpty: Bool { readings == 0 }
@@ -121,17 +127,25 @@ struct UsageSeries {
     func periods(_ granularity: Granularity) -> [UsagePeriod] {
         aggregateUsage(
             buckets, standing: standing, tz: tz, by: granularity,
-            window: from.flatMap { start in to.map { (start, $0) } })
+            window: from.flatMap { start in to.map { (start, $0) } }, offPeakWindows: offPeakWindows)
     }
 }
 
 /// Groups buckets into columns, oldest first. `standing` is per half hour, so it sums per period.
 func aggregateUsage(
     _ buckets: [UsageBucket], standing: [(start: Date, pence: Double)], tz: TimeZone,
-    by granularity: Granularity = .day, window: (from: Date, to: Date)? = nil
+    by granularity: Granularity = .day, window: (from: Date, to: Date)? = nil,
+    offPeakWindows: [(from: Int, to: Int)] = []
 ) -> [UsagePeriod] {
     let cal = calendar(tz)
     let threshold = priceThreshold(buckets)
+    let smartHalfHours = Set(buckets.filter { isSmartChargeBucket($0.label) }.map(\.start))
+    // Octopus doesn't always bill a daytime dispatch to an EV bucket — it can arrive as plain
+    // household use at the off-peak price — so on a timetabled or Intelligent tariff, cheap outside
+    // the timetable is itself the sign of a smart charge. Not on Agile, which has neither and is
+    // cheap at all hours for its own reasons.
+    let timetabled = !offPeakWindows.isEmpty || !smartHalfHours.isEmpty
+    let windows = offPeakWindows.isEmpty ? fallbackWindows : offPeakWindows
 
     func bounds(_ instant: Date) -> (start: Date, end: Date) {
         switch granularity {
@@ -161,10 +175,13 @@ func aggregateUsage(
     for bucket in buckets {
         let (start, end) = bounds(bucket.start)
         var entry = periods[start] ?? UsagePeriod(start: start, end: end)
-        let slot = band(for: bucket, threshold: threshold)
+        var slot = band(for: bucket, threshold: threshold)
+        let outside = !inWindows(bucket.start, windows, cal: cal)
+        let smartSlot = smartHalfHours.contains(bucket.start) || (timetabled && slot == .cheap && outside)
+        if slot == .cheap, smartSlot, outside { slot = .smart }
         entry.kwh[slot, default: 0] += bucket.kwh
         entry.pence[slot, default: 0] += bucket.pence
-        if isSmartChargeBucket(bucket.label) {
+        if smartSlot {
             entry.smartCharge = true
             if !entry.smartSlots.contains(bucket.start) { entry.smartSlots.append(bucket.start) }
         }
@@ -295,13 +312,14 @@ func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack:
 
     // Only electricity carries a time-of-use scheme; gas takes the account's own timezone.
     var tzName = "Europe/London"
+    var windows: [(from: Int, to: Int)] = []
     if fuel == .electricity {
         let detail = try await gql(
             """
             query($a:String!){account(accountNumber:$a){
               electricityAgreements(active:true){
                 meterPoint{mpan}
-                timeOfUseScheme{timezone}
+                timeOfUseScheme{timezone timeslots{timeslot activeFrom activeTo}}
               }
             }}
             """, ["a": account], token: token)
@@ -309,7 +327,9 @@ func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack:
         let agreement = ((acc["electricityAgreements"] as? [[String: Any]]) ?? []).first {
             ($0["meterPoint"] as? [String: Any])?["mpan"] as? String == supplyPoint
         }
-        tzName = ((agreement?["timeOfUseScheme"] as? [String: Any])?["timezone"] as? String) ?? tzName
+        let scheme = agreement?["timeOfUseScheme"] as? [String: Any]
+        tzName = (scheme?["timezone"] as? String) ?? tzName
+        windows = offPeakWindows(scheme)
     }
     let tz = TimeZone(identifier: tzName) ?? TimeZone(identifier: "Europe/London")!
     let cal = calendar(tz)
@@ -403,5 +423,6 @@ func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack:
     let label = (result.unit?.lowercased() == "kwh" ? "kWh" : result.unit) ?? fuel.defaultEnergyLabel
     return UsageSeries(
         buckets: result.buckets, standing: result.standing, tz: tz, from: windowStart, to: windowEnd,
-        energyLabel: label, supportsHalfHour: supportsHalfHour, readings: result.readings)
+        energyLabel: label, supportsHalfHour: supportsHalfHour, readings: result.readings,
+        offPeakWindows: windows)
 }

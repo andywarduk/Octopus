@@ -151,6 +151,29 @@ actor OctopusSession {
 
 let fallbackWindows = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
 
+/// The off-peak windows a `timeOfUseScheme` states, in minutes after local midnight. Empty when it
+/// states none: Agile, for one, has no timetable.
+func offPeakWindows(_ scheme: [String: Any]?) -> [(from: Int, to: Int)] {
+    var windows: [(from: Int, to: Int)] = []
+    for slot in (scheme?["timeslots"] as? [[String: Any]]) ?? [] {
+        let name = (slot["timeslot"] as? String ?? "").lowercased()
+        guard ["off", "cheap", "night"].contains(where: name.contains),
+            let from = minutes(slot["activeFrom"] as? String ?? ""),
+            let to = minutes(slot["activeTo"] as? String ?? "")
+        else { continue }
+        windows.append((from, to))
+    }
+    return windows
+}
+
+/// Whether `instant` falls in one of `windows`, which may run across midnight.
+func inWindows(_ instant: Date, _ windows: [(from: Int, to: Int)], cal: Calendar) -> Bool {
+    let minute = cal.component(.hour, from: instant) * 60 + cal.component(.minute, from: instant)
+    return windows.contains { w in
+        w.from < w.to ? (w.from <= minute && minute < w.to) : (minute >= w.from || minute < w.to)
+    }
+}
+
 /// Every active agreement on the account, one entry per meter point, never merged.
 ///
 /// Includes variable tariffs, which have no `validTo` — Intelligent Octopus Go is one, and it is
@@ -279,16 +302,8 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
 
     let scheme = agreement["timeOfUseScheme"] as? [String: Any]
     let tz = TimeZone(identifier: scheme?["timezone"] as? String ?? "") ?? TimeZone(identifier: "Europe/London")!
-    var windows: [(from: Int, to: Int)] = []
-    for slot in (scheme?["timeslots"] as? [[String: Any]]) ?? [] {
-        let name = (slot["timeslot"] as? String ?? "").lowercased()
-        guard ["off", "cheap", "night"].contains(where: name.contains),
-            let from = minutes(slot["activeFrom"] as? String ?? ""),
-            let to = minutes(slot["activeTo"] as? String ?? "")
-        else { continue }
-        windows.append((from, to))
-    }
-    if windows.isEmpty { windows = fallbackWindows }
+    let stated = offPeakWindows(scheme)
+    let windows = stated.isEmpty ? fallbackWindows : stated
 
     // The tariff's own rates include VAT and come named, so there is no guessing which is cheap.
     let tariff = agreement["tariff"] as? [String: Any] ?? [:]

@@ -76,6 +76,33 @@ func selfTest() {
         print("  \(formatted(day.start, "EEE d MMM", tzLondon)): \(parts.joined(separator: ", "))"
             + (day.smartCharge ? "  [smart charge]" : ""))
     }
+    // A smart charge inside the off-peak window was cheap anyway, so it stays off-peak; one outside
+    // it, or under a tariff whose window is elsewhere, is the cheap time the charge earned.
+    let overnightCharge = [
+        UsageBucket(start: date("2026-09-19T00:30:00Z"), label: "CONSUMPTION_CHARGE_EV_DEVICE_OFF_PEAK_H", kwh: 2.611, pence: 18.0, pricePerUnit: 6.89997),
+        UsageBucket(start: date("2026-09-19T00:30:00Z"), label: "CONSUMPTION_CHARGE_ECO7_NIGHT_H", kwh: 0.9, pence: 6.2, pricePerUnit: 6.89997),
+        UsageBucket(start: noon, label: "CONSUMPTION_CHARGE_ECO7_DAY_H", kwh: 1.0, pence: 30.37, pricePerUnit: 30.37136),
+    ]
+    for (label, windows) in [("23:30–05:30", fallbackWindows), ("02:00–06:00", [(from: 120, to: 360)])] {
+        let day = aggregateUsage(overnightCharge, standing: [], tz: tzLondon, by: .day, offPeakWindows: windows)[0]
+        print("  01:30 smart charge, off-peak \(label): "
+            + RateBand.allCases.filter { day.value($0, .kwh) > 0 }
+                .map { "\($0.rawValue) \(formatUsage(day.value($0, .kwh), .kwh))kWh" }.joined(separator: ", "))
+    }
+    // A daytime dispatch can arrive with no EV bucket, as household use at the off-peak price. On a
+    // timetabled tariff that price is the sign; on Agile, with no timetable and no EV buckets, it isn't.
+    let unlabelledDispatch = [
+        UsageBucket(start: date("2026-09-19T03:00:00Z"), label: "CONSUMPTION_CHARGE_ECO7_NIGHT_H", kwh: 1.2, pence: 8.3, pricePerUnit: 6.89997),
+        UsageBucket(start: noon, label: "CONSUMPTION_CHARGE_ECO7_NIGHT_H", kwh: 3.5, pence: 24.1, pricePerUnit: 6.89997),
+        UsageBucket(start: date("2026-09-19T15:00:00Z"), label: "CONSUMPTION_CHARGE_ECO7_DAY_H", kwh: 1.0, pence: 30.37, pricePerUnit: 30.37136),
+    ]
+    for (label, windows) in [("timetabled", fallbackWindows), ("no timetable", [])] as [(String, [(from: Int, to: Int)])] {
+        let day = aggregateUsage(unlabelledDispatch, standing: [], tz: tzLondon, by: .day, offPeakWindows: windows)[0]
+        print("  13:00 dispatch with no EV bucket, \(label): "
+            + RateBand.allCases.filter { day.value($0, .kwh) > 0 }
+                .map { "\($0.rawValue) \(formatUsage(day.value($0, .kwh), .kwh))kWh" }.joined(separator: ", ")
+            + " — \(smartChargeText(day, granularity: .day, tz: tzLondon) ?? "no smart charge")")
+    }
     // A single-rate tariff must not produce a cheap band at all.
     let flatBuckets = buckets.map { UsageBucket(start: $0.start, label: $0.label, kwh: $0.kwh, pence: $0.pence, pricePerUnit: 30.37136) }
     print("  flat tariff threshold: \(priceThreshold(flatBuckets).map { "\($0)" } ?? "none")")

@@ -171,6 +171,11 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   present this split as car versus house — it makes a 7 kW charge look like 5.2 kW and implies
   household use that is not real. Compare a charging interval against a non-charging night's
   baseline to see it.
+- **A daytime dispatch may have no EV bucket at all.** Confirmed on the development account: a
+  smart charge outside 23:30–05:30 arrived as plain household use at the off-peak price, so
+  spotting dispatches by `EV_DEVICE` labels missed it. The usage chart's "Smart charge" band is
+  therefore by time: cheap outside the tariff's off-peak timetable, on a tariff that states one or
+  that shows any EV bucket that week. Agile has neither, and its cheap slots mean nothing of the sort.
 - **Gas and electricity put the energy in different places.** Electricity puts kWh on each tariff
   bucket's `value`. Gas leaves that null and puts the total on the reading's own `value`. Only
   fall back to the reading when exactly one consumption bucket exists, or each bucket will claim
