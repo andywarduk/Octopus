@@ -153,7 +153,11 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   `tariff` rates where they exist: the fixed-rate types (`StandardTariff`, `DayNightTariff`,
   `FourRateEvTariff`, …) name them (`dayRate`, `evDeviceOffPeakRate`, …) including VAT, alongside
   `preVat…` siblings and a `standingCharge`. `applicableRates` is the fallback, grossed up by
-  `vatMultiplier`.
+  the tariff's `vatMultiplier`.
+- **No field states the VAT rate, and it is not a constant.** GB domestic electricity went from 5%
+  to 0% for 1 October 2026 – 31 March 2027; gas stayed at 5%. A hard-coded 1.05 overstated
+  Intelligent Go prices by 5% from that date. Every tariff type has `standingCharge` and
+  `preVatStandingCharge`, so the rate is their ratio, rounded to the nearest half percent (17.5% has been a UK rate).
 - **Intelligent Octopus Go is a `HalfHourlyTariff`, not a `FourRateEvTariff`.** On the development
   account the agreement's tariff arrives as `HalfHourlyTariff`, which has no named rates — only
   `standingCharge`, `preVatStandingCharge` and a `unitRates` list whose contents have not been

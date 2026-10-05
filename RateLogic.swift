@@ -183,9 +183,15 @@ struct DispatchAlertGate {
     }
 }
 
-/// Domestic energy VAT. Only used to gross up the rare tariff that has no stated rates, since
-/// applicableRates quotes prices before tax while everything else on screen includes it.
-let vatMultiplier = 1.05
+/// The VAT a tariff charges, read off its standing charge with and without tax — the API states no
+/// rate, and it changes (0% on GB electricity from October 2026 to March 2027). Only used to gross
+/// up the rare tariff that has no stated rates, since applicableRates quotes prices before tax
+/// while everything else on screen includes it. Rounded to the nearest half percent — fine enough
+/// for a rate like 17.5%, coarse enough that rounding in either figure can't leak in.
+func vatMultiplier(standingCharge: Double?, preVat: Double?) -> Double? {
+    guard let withVat = standingCharge, let preVat, preVat > 0 else { return nil }
+    return (withVat / preVat * 200).rounded() / 200
+}
 
 /// How far either side of a rate switch counts as "about to change".
 let switchWindow: TimeInterval = 3 * 60

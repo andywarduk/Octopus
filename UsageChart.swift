@@ -535,9 +535,9 @@ struct SeededGenerator: RandomNumberGenerator {
 
 /// A week shaped like a real one: a small household base load, plus a 7 kW charge overnight and
 /// on two afternoons. At 7 kW a half hour is 3.5 kWh, so the charging blocks are flat-topped.
-func sampleUsageWeek(tz: TimeZone) -> UsageSeries {
+func sampleUsageWeek(tz: TimeZone, now: Date = Date()) -> UsageSeries {
     let cal = calendar(tz)
-    guard let weekStart = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: Date())) else {
+    guard let weekStart = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: now)) else {
         return UsageSeries()
     }
     let chargerKw = 7.0

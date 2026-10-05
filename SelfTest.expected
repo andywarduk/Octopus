@@ -37,6 +37,14 @@
   VAT handling:
     standard: 28.9251p ex VAT -> 30.3714p incl
     off-peak: 6.5714p ex VAT -> 6.9000p incl
+    5%: x1.050
+    5%, rounded figures: x1.050
+    0%: x1.000
+    17.5%: x1.175
+    17.5%, rounded figures: x1.175
+    20%: x1.200
+    no pre-VAT figure: unknown
+    zero pre-VAT figure: unknown
   dispatch changes:
     unchanged       : no alert
     shifted 3 min   : no alert
@@ -61,7 +69,7 @@
     device query, fixed rates, no ids yet: 0 plan aliases, rates omitted
     device query, Agile, two ids: 2 plan aliases, rates included
     tariff with no fixed rates: ratesFromTariff=false, windows ["23:30–05:30"]
-    HalfHourlyTariff: ratesFromTariff=false, standing 49.41p
+    HalfHourlyTariff: ratesFromTariff=false, standing 49.41p, VAT x1.00
     device reply: ids ["d1"], cars ["MINI Cooper"], dispatches 2, planned [2.611]
   tariff end dates:
     electricity  Octopus 12M Fixed        1 Test Lane    last day Thu 8 Oct 2026

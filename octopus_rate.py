@@ -206,7 +206,7 @@ account_node = run(
           ... on DayNightTariff{dayRate nightRate standingCharge}
           ... on ThreeRateTariff{dayRate nightRate offPeakRate standingCharge}
           ... on FourRateEvTariff{dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge}
-          ... on HalfHourlyTariff{standingCharge}
+          ... on HalfHourlyTariff{standingCharge preVatStandingCharge}
         }
       }
       properties{
@@ -284,7 +284,6 @@ if data is None:
 
 # applicableRates returns the tariff's rate bands clipped to the query window, so the
 # validFrom/validTo values don't say when each band applies. Use the lowest and highest.
-VAT_MULTIPLIER = 1.05  # domestic energy; only needed for the applicableRates fallback
 RATE_FIELDS = ("unitRate", "dayRate", "nightRate", "offPeakRate", "evDevicePeakRate", "evDeviceOffPeakRate")
 
 tariff = agreement.get("tariff") or {}
@@ -292,7 +291,14 @@ tariff_rates = sorted({round(v, 4) for f in RATE_FIELDS if (v := to_float(tariff
 if tariff_rates:
     cheap_rate, peak_rate = tariff_rates[0], tariff_rates[-1]
 else:
-    values = sorted({round(float(e["node"]["value"]) * VAT_MULTIPLIER, 4) for e in data["applicableRates"]["edges"]})
+    # applicableRates excludes VAT. The API states no rate, and it changes (0% on GB electricity
+    # from October 2026 to March 2027), so read it off the standing charge's two figures, rounded
+    # to the nearest half percent (enough for 17.5%, too coarse for rounding in either to leak in).
+    with_vat, pre_vat = to_float(tariff.get("standingCharge")), to_float(tariff.get("preVatStandingCharge"))
+    if not (with_vat and pre_vat):
+        sys.exit("Tariff states no pre-VAT standing charge to work out VAT from.")
+    vat = round(with_vat / pre_vat * 200) / 200
+    values = sorted({round(float(e["node"]["value"]) * vat, 4) for e in data["applicableRates"]["edges"]})
     if not values:
         sys.exit("No applicable rates returned.")
     cheap_rate, peak_rate = values[0], values[-1]

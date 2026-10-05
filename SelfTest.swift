@@ -157,8 +157,18 @@ func selfTest() {
     }
     // applicableRates quotes before tax; the tariff's own rates already include it.
     print("  VAT handling:")
+    let fivePercent = vatMultiplier(standingCharge: 54.81, preVat: 52.2)!
     for (label, exVat) in [("standard", 28.9251), ("off-peak", 6.5714)] {
-        print(String(format: "    %@: %.4fp ex VAT -> %.4fp incl", label, exVat, exVat * vatMultiplier))
+        print(String(format: "    %@: %.4fp ex VAT -> %.4fp incl", label, exVat, exVat * fivePercent))
+    }
+    // The rate comes from the standing charge's two figures, which may each be rounded.
+    for (label, withVat, preVat) in [
+        ("5%", 54.81, 52.2), ("5%, rounded figures", 47.61, 45.34), ("0%", 49.41, 49.41),
+        ("17.5%", 47.0, 40.0), ("17.5%, rounded figures", 12.34, 10.5), ("20%", 60.0, 50.0),
+        ("no pre-VAT figure", 49.41, nil), ("zero pre-VAT figure", 0, 0),
+    ] as [(String, Double?, Double?)] {
+        let vat = vatMultiplier(standingCharge: withVat, preVat: preVat)
+        print("    \(label): \(vat.map { String(format: "x%.3f", $0) } ?? "unknown")")
     }
 
     // Octopus re-plans slots by a few minutes constantly; only a real change should alert.
@@ -266,12 +276,14 @@ func selfTest() {
     let iogNode: [String: Any] = [
         "electricityAgreements": [
             ["meterPoint": ["mpan": "1000"],
-             "tariff": ["__typename": "HalfHourlyTariff", "displayName": "Intelligent Octopus Go", "standingCharge": 49.41]],
+             "tariff": ["__typename": "HalfHourlyTariff", "displayName": "Intelligent Octopus Go",
+                        "standingCharge": 49.41, "preVatStandingCharge": 49.41]],
         ],
     ]
     let iog = try? parseTariffState(iogNode, account: "A-1", mpan: "1000", now: fetchedTariff)
     print("    HalfHourlyTariff: ratesFromTariff=\(iog?.ratesFromTariff ?? true), "
-        + "standing \(iog?.standingCharge.map { String(format: "%.2fp", $0) } ?? "none")")
+        + "standing \(iog?.standingCharge.map { String(format: "%.2fp", $0) } ?? "none"), "
+        + "VAT x\(iog?.vatMultiplier.map { String(format: "%.2f", $0) } ?? "none")")
     let reply: [String: Any] = [
         "devices": [
             ["__typename": "SmartFlexVehicle", "id": "d1", "make": "MINI", "model": "Cooper",
@@ -627,7 +639,8 @@ func selfTest() {
 
     // The tooltip says when a day's smart charges ran, joining back-to-back half hours.
     print("  smart charge times:")
-    let sampleWeek = sampleUsageWeek(tz: tzLondon)
+    // A fixed day, not the clock: the week runs Sat 19 – Fri 25 Sep, which the half hours below assume.
+    let sampleWeek = sampleUsageWeek(tz: tzLondon, now: date("2026-09-25T12:00:00Z"))
     for period in sampleWeek.periods(.day) {
         guard let text = smartChargeText(period, granularity: .day, tz: tzLondon) else { continue }
         print("    \(formatted(period.start, "EEE d", tzLondon)): \(text)")
@@ -635,7 +648,10 @@ func selfTest() {
     // A half hour gives the whole run it sits in, across midnight too, not just itself.
     let weekHalfHours = sampleWeek.periods(.halfHour)
     for start in ["2026-09-23T12:30:00Z", "2026-09-22T23:00:00Z", "2026-09-23T02:00:00Z"] {
-        guard let halfHour = weekHalfHours.first(where: { $0.start == date(start) }) else { continue }
+        guard let halfHour = weekHalfHours.first(where: { $0.start == date(start) }) else {
+            print("    half hour \(start): not in the sample week")
+            continue
+        }
         print("    half hour \(formatted(halfHour.start, "EEE HH:mm", tzLondon)): "
             + (smartChargeText(halfHour, granularity: .halfHour, tz: tzLondon, periods: weekHalfHours) ?? "no smart charge"))
     }

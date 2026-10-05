@@ -232,6 +232,8 @@ struct TariffState {
     var cheapRate: Double?
     var peakRate: Double?
     var standingCharge: Double?
+    /// From the standing charge's with- and without-VAT figures; grosses up applicableRates.
+    var vatMultiplier: Double?
     var windows: [(from: Int, to: Int)]
     var tz: TimeZone
     var balancePence: Int?
@@ -284,7 +286,10 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
 
     return TariffState(
         accountNumber: account, mpan: mpan, cheapRate: tariffRates.min(), peakRate: tariffRates.max(),
-        standingCharge: toDouble(tariff["standingCharge"]), windows: windows, tz: tz,
+        standingCharge: toDouble(tariff["standingCharge"]),
+        vatMultiplier: vatMultiplier(
+            standingCharge: toDouble(tariff["standingCharge"]), preVat: toDouble(tariff["preVatStandingCharge"])),
+        windows: windows, tz: tz,
         balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
         projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
         tariffEnds: parseTariffEnds(accountNode, accountNumber: account, now: now),
@@ -404,7 +409,8 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
         // Balance and agreement end dates hang off the same `account` node as the tariff, so they
         // ride along on this request rather than costing another one. Intelligent Octopus Go
         // arrives as a HalfHourlyTariff, whose unitRates list is of unknown shape, so only its
-        // standing charge is taken; its prices come from applicableRates.
+        // standing charge is taken; its prices come from applicableRates, and the VAT to add to
+        // them from the standing charge's pre-VAT twin.
         let agr = try await gql(
             """
             query($a:String!){account(accountNumber:$a){
@@ -424,7 +430,7 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
                   ... on FourRateEvTariff{
                     dayRate nightRate evDevicePeakRate evDeviceOffPeakRate standingCharge
                   }
-                  ... on HalfHourlyTariff{standingCharge}
+                  ... on HalfHourlyTariff{standingCharge preVatStandingCharge}
                 }
               }
               properties{
@@ -505,7 +511,10 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
             throw ApiError(message: "No rates returned")
         }
         // Grossed up by VAT so the two sources can never disagree on screen.
-        (cheap, peak) = (low * vatMultiplier, high * vatMultiplier)
+        guard let vat = tariff.vatMultiplier else {
+            throw ApiError(message: "Tariff states no pre-VAT standing charge to work out VAT from")
+        }
+        (cheap, peak) = (low * vat, high * vat)
     }
 
     // Charge level is secondary; the rate display still works without it. But a failed device
