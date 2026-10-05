@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         set { UserDefaults.standard.set(newValue, forKey: "tariffAlerted") }
     }
     /// Consecutive failed fetches. Automatic refreshing stops at maxFailures so a bad key or a
-    /// long outage can't hammer the API; "Refresh Now" clears it.
+    /// long outage can't hammer the API; "Refresh Now" clears it. Being offline doesn't count.
     var failures = 0
     var autoRefreshPaused = false
     var menuIsOpen = false
@@ -165,7 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             } catch {
                 await invalidateSession(after: error)
                 if generation == fetchGeneration {
-                    failures += 1
+                    // Waking from sleep fails every tick until Wi-Fi is back, and dark wakes fail
+                    // all night; none of it reaches Octopus, so none of it may stop refreshing.
+                    if !isOffline(error) { failures += 1 }
                     if failures >= Self.maxFailures {
                         autoRefreshPaused = true
                         lastError = "\(error.localizedDescription) — stopped after \(Self.maxFailures) failed attempts. Choose Refresh Now to try again."

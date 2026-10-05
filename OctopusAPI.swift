@@ -12,8 +12,20 @@ struct ApiError: Error, LocalizedError {
 }
 
 /// Drops the cached token and meters unless the error is known not to concern them.
+/// Whether a failure is this Mac's network rather than Octopus's answer: asleep, just woken, or
+/// between networks. Such failures say nothing about the key or the token, so they neither drop the
+/// session nor count toward stopping automatic refreshes.
+func isOffline(_ error: Error) -> Bool {
+    guard let code = (error as? URLError)?.code else { return false }
+    let offline: [URLError.Code] = [
+        .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .dnsLookupFailed,
+        .timedOut, .dataNotAllowed, .internationalRoamingOff,
+    ]
+    return offline.contains(code)
+}
+
 func invalidateSession(after error: Error) async {
-    if (error as? ApiError)?.invalidatesSession == false { return }
+    if (error as? ApiError)?.invalidatesSession == false || isOffline(error) { return }
     await OctopusSession.shared.invalidate()
 }
 

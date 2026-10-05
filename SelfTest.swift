@@ -238,6 +238,17 @@ func selfTest() {
     }
     print("    first fetch: known \(uncarried.devicesKnown), menu says \"\(deviceLines.joined())\"")
 
+    // Failures around sleep never reach Octopus and mustn't stop automatic refreshing.
+    print("  offline failures:")
+    for (label, error) in [
+        ("no internet", URLError(.notConnectedToInternet)), ("connection lost", URLError(.networkConnectionLost)),
+        ("timed out", URLError(.timedOut)), ("DNS", URLError(.cannotFindHost)),
+        ("cancelled", URLError(.cancelled)), ("bad key", ApiError(message: "Invalid API key")),
+        ("HTTP 500", ApiError(message: "Octopus returned HTTP 500")),
+    ] as [(String, Error)] {
+        print("    \(label.padding(toLength: 16, withPad: " ", startingAt: 0)): \(isOffline(error) ? "offline, not counted" : "counted")")
+    }
+
     // A refresh reuses the tariff for an hour, but never across a meter change or when asked for.
     print("  refresh split:")
     let fetchedTariff = date("2026-09-19T15:00:00Z")

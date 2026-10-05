@@ -59,6 +59,14 @@
   device query failure:
     after a good fetch: cars 2, planned 1, known true, cheap at 12:30Z true
     first fetch: known false, menu says "Couldn't load smart devices"
+  offline failures:
+    no internet     : offline, not counted
+    connection lost : offline, not counted
+    timed out       : offline, not counted
+    DNS             : offline, not counted
+    cancelled       : counted
+    bad key         : counted
+    HTTP 500        : counted
   refresh split:
     tariff 5 min old       : reused
     tariff 59 min old      : reused
