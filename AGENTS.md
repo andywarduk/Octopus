@@ -195,11 +195,42 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   app-only and live behind different auth. Do not plan features around them.
 - **`smartMeterTelemetry` needs a Home Mini, not just a smart meter.** It offers `demand` in
   watts, `consumptionDelta` in Wh and `costDeltaWithTax` in pence, grouped from `TEN_SECONDS` to
-  `HOURLY` — but keyed on a CAD being paired to the home area network. On an account without one
-  it returns **no rows and no error** at every grouping, over at least eight days, which reads
-  exactly like a wrong query. Check `smartDeviceNetwork(deviceId:)` first: it lists the HAN, and
-  if that shows only ESME/GSME/PPMID/CHF/GPF there is no Home Mini and telemetry will never
-  return anything. The development account has none, so this whole area is unexercised.
+  `HOURLY` — but keyed on a CAD being paired to the home area network. Without one it returns
+  **no rows and no error** at every grouping, over at least eight days, which reads exactly like a
+  wrong query. Check the HAN first — `property.smartDeviceNetworks`, or
+  `smartDeviceNetwork(deviceId:)` — and look for a `CAD`. It is per network: on the development
+  account the property without a Mini still returns nothing while the one with it works.
+  Probed on 12 October 2026, the day a Mini was paired:
+  - The Mini lists as a `CAD`, Kraken Technologies `CADLite`, with status `NOT_APPLICABLE` and an
+    empty firmware version while working. Do not filter devices on `COMMISSIONED` to find it.
+  - Pass the **meter's** `deviceId` (`ESME` or `GSME`), not the Mini's.
+  - `readAt` is the **start** of each bucket, and the newest bucket is still filling: at 13:43 the
+    13:30 half hour already had a row, holding thirteen minutes' energy.
+  - `consumption` is the cumulative register in Wh as of the bucket's last reading, and
+    `consumptionDelta` the energy within the bucket. Successive registers difference to the delta
+    exactly, at every grouping.
+  - The register resolves whole watt-hours, so a `TEN_SECONDS` delta is mostly 0 or 1. Use
+    `demand` at fine groupings. A ten-second row goes missing now and then (19:12:40 was absent
+    between :30 and :50); the next row's delta spans the gap.
+  - On grouped rows `demand` is the sample at the bucket's last reading, the same instant as
+    `consumption` — not the bucket's average. The 18:00 hour and the 18:30 half hour inside it
+    both read 496 W on the same register, while their deltas imply 409 W and 428 W. Average power
+    is `consumptionDelta` over the bucket length.
+  - Electricity `costDelta` and `costDeltaWithTax` are **null** at every grouping, on
+    Intelligent Octopus Go, even over a half hour of 214 Wh — pricing it is the app's job.
+  - Gas does carry cost, at `FIVE_MINUTES` and coarser (null at `ONE_MINUTE`), in pence:
+    `costDelta` before VAT and `costDeltaWithTax` after. An hour of 4,275.06 Wh cost 33.2540p and
+    34.9167p — exactly × 1.05, gas VAT — which is 8.17p/kWh. That price is also what confirms gas
+    is in **Wh of energy**, already converted from volume: read as kWh or m³ it is absurd.
+  - Decimals are strings and sometimes in exponent form: a register ending in zero arrived as
+    `4.304052E+7`, a zero cost as `0E-7`. Lossless — they look like normalised decimals — but a
+    parser expecting plain digits drops them.
+  - Gas comes roughly half-hourly, stamped when the meter wakes (a row at 19:04), with no
+    `TEN_SECONDS` rows and no `demand` or `export`. Since a delta lands in the bucket holding the
+    reading that reported it, a gas half hour holds the energy used up to that reading — mostly
+    the half hour *before* it. Do not line gas buckets up against electricity's as simultaneous.
+  - Nothing before the Mini is backfilled: the earliest row was about 11:40Z on the day it went
+    in. How long rows are kept is not yet known.
 - **`smartDevices` is a list**, though introspection's `ofType` chain reports it as a single
   `SmartMeterDeviceType` unless you keep the `LIST` kind while unwrapping.
 - **`SmartFlexVehicle.chargePointPowerOutput` gives the charger's rating directly** (7.000 on the
@@ -345,7 +376,8 @@ Built against an account with two properties, each with an import electricity me
 meter, all on live agreements. Electricity is Intelligent Octopus Go with `ECO7_DAY`/`ECO7_NIGHT`
 and `EV_DEVICE_PEAK`/`EV_DEVICE_OFF_PEAK` buckets, a 7 kW EV charger, and a Home-Mini-style device
 reporting charge level. One gas meter reports real usage, the other is effectively unused and
-returns all zeros — which is how the zero-usage bug was found.
+returns all zeros — which is how the zero-usage bug was found. Since 12 October 2026 one
+property has a Home Mini; the other has none.
 
 Single-property, single-fuel and flat-tariff accounts are handled but have never been exercised
 against real data. Treat those paths as unverified.
