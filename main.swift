@@ -8,7 +8,6 @@
 
 import Cocoa
 
-// OctopusMenuBar --iconset DIR : write the PNGs that `iconutil -c icns` expects.
 /// Creates an output directory for the flags below. Writing into one that doesn't exist fails
 /// silently, which looks like a render that produced different images from last time.
 func outputDirectory(_ path: String) -> String {
@@ -16,6 +15,7 @@ func outputDirectory(_ path: String) -> String {
     return path
 }
 
+// OctopusMenuBar --iconset DIR : write the PNGs that `iconutil -c icns` expects.
 if let i = CommandLine.arguments.firstIndex(of: "--iconset"), i + 1 < CommandLine.arguments.count {
     let dir = outputDirectory(CommandLine.arguments[i + 1])
     for size in [16, 32, 128, 256, 512] {
@@ -55,7 +55,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
 
         // The carbon chart is drawn by hand too, so it gets the same treatment. `now` is fixed
         // rather than read from the clock, or the rule moves between runs and the images differ.
-        let tz = TimeZone(identifier: "Europe/London") ?? .current
+        let tz = londonTimeZone
         let start = ISO8601DateFormatter().date(from: "2026-09-22T17:00:00Z")!
         let forecast = sampleCarbonForecast(from: start)
         for (name, dark, mode, hover) in [

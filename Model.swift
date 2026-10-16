@@ -2,6 +2,9 @@
 
 import Foundation
 
+/// A daily window in minutes after local midnight. `to` before `from` runs across midnight.
+typealias TimeWindow = (from: Int, to: Int)
+
 struct Interval {
     var start: Date
     var end: Date
@@ -61,7 +64,7 @@ struct Snapshot {
     var peakRate: Double
     /// Daily standing charge in pence including VAT, when the tariff states one.
     var standingCharge: Double?
-    var windows: [(from: Int, to: Int)]  // minutes after local midnight
+    var windows: [TimeWindow]
     var dispatches: [Interval]
     var cars: [Car]
     /// False when the device query failed. Then `cars` is empty and `dispatches` holds only

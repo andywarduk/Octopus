@@ -81,11 +81,15 @@ settled by rendering it at a much lower value and confirming the difference.
 | File | Contents |
 | --- | --- |
 | `Model.swift` | `Interval`, `Car`, `Snapshot`, `Line` |
-| `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, fetch interval, menu text |
+| `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, rate changes, the charge plan, fetch interval, tariff-end alerts |
+| `MenuLines.swift` | The status item's symbol and tooltip, and every line of the menu |
+| `Formatting.swift` | Dates, times and amounts, the shared London timezone and calendar |
 | `Keychain.swift` | Reading, saving and removing the API key |
 | `MeterSelection.swift` | Fuels, discovering meters per property, saved choice per fuel |
 | `OctopusAPI.swift` | GraphQL transport, the shared session cache, and the tariff and device halves of a `Snapshot` |
 | `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch |
+| `ChartView.swift` | What both charts share: the `ChartView` base class, the tooltip box, axis scaling, the offscreen render |
+| `ChartWindow.swift` | What both chart windows share: chevrons, week range, status line, footer, layout |
 | `UsageChart.swift` | The stacked column chart, its palette, and the offscreen renderer |
 | `UsageWindowController.swift` | One usage window; one instance per meter |
 | `CarbonIntensity.swift` | Carbon intensity model and both sources' fetch and parsing |
@@ -291,7 +295,7 @@ Built in Swift 6 language mode, so the usual traps apply:
 
 - Top-level code in `main.swift` is **not** MainActor-isolated. Creating the `AppDelegate` or
   touching a view needs `MainActor.assumeIsolated`.
-- Global mutable state must be concurrency-safe. `FormatterCache` in `RateLogic.swift` is
+- Global mutable state must be concurrency-safe. `FormatterCache` in `Formatting.swift` is
   `@unchecked Sendable` with an `NSLock` guarding the dictionary; `DateFormatter` itself is safe to
   format from multiple threads.
 - `UNUserNotificationCenterDelegate` callbacks arrive off the main actor and are marked
@@ -391,7 +395,7 @@ against real data. Treat those paths as unverified.
   as the standing charge does — it marks a residual, not a fuel. Re-run `validate_palette.js` if
   any of this moves.
 - **Tooltip rows carry the swatch of the mark they describe**, drawn by the shared
-  `drawTooltipBox` in `UsageChart.swift` — both charts use it, and it also owns the
+  `drawTooltipBox` in `ChartView.swift` — both charts use it, and it also owns the
   beside-not-over placement. The gutter is reserved for every row as soon as any row has a
   swatch, so the text stays in one column instead of stepping in and out. The carbon chart keeps
   the intensity band's swatch in both views: in fuel-mix mode no bar is drawn in that colour, but

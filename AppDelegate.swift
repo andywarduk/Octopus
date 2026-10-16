@@ -58,11 +58,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// A manual refresh asked for while one was already running. It runs as soon as that one ends,
     /// rather than being dropped and leaving the old key's or old meter's data up for five minutes.
     var refreshQueued = false
+    /// The three alerts, each on until turned off in Settings.
+    var notifyEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "notifyBeforeCheap") }
+    }
     var dispatchAlertEnabled: Bool {
-        UserDefaults.standard.object(forKey: "notifyDispatchChange") as? Bool ?? true
+        get { UserDefaults.standard.object(forKey: "notifyDispatchChange") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "notifyDispatchChange") }
     }
     var tariffAlertEnabled: Bool {
-        UserDefaults.standard.object(forKey: "notifyTariffEnding") as? Bool ?? true
+        get { UserDefaults.standard.object(forKey: "notifyTariffEnding") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "notifyTariffEnding") }
     }
     /// The tightest threshold already announced per agreement. Persisted, because the alert is
     /// once per threshold over two months and a relaunch must not start that over.
@@ -79,7 +86,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var shownIcon: String?
     static let maxFailures = 10
     static let leadTime: TimeInterval = 10 * 60
-    var notifyEnabled: Bool { UserDefaults.standard.object(forKey: "notifyBeforeCheap") as? Bool ?? true }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.applicationIconImage = makeAppIcon()
@@ -222,7 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             do {
                 let fetched = try await fetchRegionalReadings(
                     outward: outwardCode(postcode), period: .forecast,
-                    tz: TimeZone(identifier: "Europe/London") ?? .current)
+                    tz: londonTimeZone)
                 carbonReadings = fetched.readings
                 carbonPostcode = postcode
                 carbonDueAt = Date().addingTimeInterval(Self.carbonInterval)
@@ -233,7 +239,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             updateIcon()
         }
     }
-
 
     @objc func openMenuAction(_ sender: NSMenuItem) {
         guard menuActions.indices.contains(sender.tag) else { return }
@@ -258,7 +263,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         for controller in usageControllers.values { controller.close() }
         usageControllers.removeAll()
     }
-
 
     @objc func refreshNow() { refresh(manual: true) }
 

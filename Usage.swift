@@ -6,7 +6,8 @@
 import Foundation
 
 /// Declaration order is the stack order, bottom to top: standard sits underneath, so the
-/// off-peak block on top is easy to compare night to night. Bands are prices, which are real. The tariff's per-device buckets
+/// off-peak block above it is easy to compare night to night, with smart-charge time on top.
+/// Bands are prices and times, which are real. The tariff's per-device buckets
 /// are NOT a measurement of what each device drew — Octopus allocates a fixed amount to the EV
 /// bucket and the rest of the car's draw lands in the household bucket at the same price — so a
 /// dispatch is flagged on the period instead of being split out by bucket.
@@ -24,7 +25,7 @@ enum RateBand: String, CaseIterable {
 
 /// The standing charge is part of what a period costs, so it stacks whenever money is shown. It
 /// has no place on a kWh axis, where it would be energy that was never delivered.
-func visibleBands(_ unit: UsageUnit, _ granularity: Granularity) -> [RateBand] {
+func visibleBands(_ unit: UsageUnit) -> [RateBand] {
     unit == .money ? RateBand.allCases : RateBand.allCases.filter(\.isConsumption)
 }
 
@@ -48,9 +49,10 @@ struct UsagePeriod {
     var kwh: [RateBand: Double] = [:]
     var pence: [RateBand: Double] = [:]
     var standingPence: Double = 0
-    /// Some of this period was billed against an EV device bucket, i.e. a smart charge ran.
+    /// A smart charge ran in some of this period: billed to an EV device bucket, or cheap outside
+    /// the off-peak timetable.
     var smartCharge = false
-    /// Starts of the half hours billed to a smart-charge bucket, so a day's tooltip can say when.
+    /// Starts of the half hours a smart charge ran in, so a day's tooltip can say when.
     var smartSlots: [Date] = []
     /// The API returned something for this period. False means not published yet, which is not
     /// the same as having used nothing — Octopus runs roughly two days behind.
@@ -111,7 +113,7 @@ struct UsageSeries {
     var readings = 0
     /// The meter's off-peak timetable, which separates off-peak from smart-charge cheap time.
     /// Empty when the tariff states none.
-    var offPeakWindows: [(from: Int, to: Int)] = []
+    var offPeakWindows: [TimeWindow] = []
 
     /// Zero consumption is data, so emptiness is about readings rather than usage.
     var isEmpty: Bool { readings == 0 }
@@ -135,7 +137,7 @@ struct UsageSeries {
 func aggregateUsage(
     _ buckets: [UsageBucket], standing: [(start: Date, pence: Double)], tz: TimeZone,
     by granularity: Granularity = .day, window: (from: Date, to: Date)? = nil,
-    offPeakWindows: [(from: Int, to: Int)] = []
+    offPeakWindows: [TimeWindow] = []
 ) -> [UsagePeriod] {
     let cal = calendar(tz)
     let threshold = priceThreshold(buckets)
@@ -311,8 +313,8 @@ func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack:
     let propertyId = choice.propertyId
 
     // Only electricity carries a time-of-use scheme; gas takes the account's own timezone.
-    var tzName = "Europe/London"
-    var windows: [(from: Int, to: Int)] = []
+    var tzName = londonTimeZone.identifier
+    var windows: [TimeWindow] = []
     if fuel == .electricity {
         let detail = try await gql(
             """
@@ -331,7 +333,7 @@ func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack:
         tzName = (scheme?["timezone"] as? String) ?? tzName
         windows = offPeakWindows(scheme)
     }
-    let tz = TimeZone(identifier: tzName) ?? TimeZone(identifier: "Europe/London")!
+    let tz = TimeZone(identifier: tzName) ?? londonTimeZone
     let cal = calendar(tz)
     let iso = ISO8601DateFormatter()
     iso.timeZone = tz

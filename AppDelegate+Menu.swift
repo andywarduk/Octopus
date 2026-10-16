@@ -107,7 +107,7 @@ extension AppDelegate {
                 menu.addItem(infoItem(loading ? "Loading…" : "No data yet", font: .menuFont(ofSize: 0), color: .labelColor))
             }
             // The carbon window needs no Octopus data, so it stays reachable without any.
-            add(carbonLines(carbon, now: now, tz: TimeZone(identifier: "Europe/London") ?? .current))
+            add(carbonLines(carbon, now: now, tz: londonTimeZone))
         }
 
         // Acting on the app itself, rather than opening something. The windows open from the

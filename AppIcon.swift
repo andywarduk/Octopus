@@ -3,7 +3,6 @@
 
 import Cocoa
 
-/// Menu-bar-only apps have no bundle icon, so dialogs show a generic one; draw one instead.
 func makeAppIcon() -> NSImage {
     NSImage(size: NSSize(width: 512, height: 512), flipped: false) { rect in
         let body = rect.insetBy(dx: 32, dy: 32)
@@ -32,5 +31,5 @@ func renderIcon(pixels: Int, to path: String) {
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     makeAppIcon().draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels))
     NSGraphicsContext.restoreGraphicsState()
-    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    writePNG(rep, to: path)
 }

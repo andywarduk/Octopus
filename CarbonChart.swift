@@ -75,85 +75,22 @@ func formatPower(_ megawatts: Double, short: Bool = false) -> String {
 }
 
 @MainActor
-final class CarbonChartView: NSView {
+final class CarbonChartView: ChartView {
     var readings: [CarbonReading] = [] { didSet { needsDisplay = true } }
     var mode: CarbonMode = .intensity { didSet { needsDisplay = true } }
-    var placeholder: String? { didSet { needsDisplay = true } }
-    var tz: TimeZone = .current { didSet { needsDisplay = true } }
     /// Drawn as a "now" rule. Held rather than read from the clock so the offscreen renderer can
     /// place it deterministically.
     var now: Date = Date() { didSet { needsDisplay = true } }
-    private var hoverIndex: Int?
-    private var plotRect: CGRect = .zero
-    private var slotWidth: CGFloat = 0
 
-    override var isFlipped: Bool { false }
-
-    private var pixelScale: CGFloat { window?.backingScaleFactor ?? 1 }
-
-    /// Same reasoning as the usage chart: snapping to whole points makes neighbouring bars
-    /// alternate 1pt and 2pt on a Retina display.
-    private func snapToPixel(_ value: CGFloat) -> CGFloat {
-        (value * pixelScale).rounded() / pixelScale
-    }
-
-    private var isDark: Bool {
-        effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-    }
+    override var slotCount: Int { readings.count }
 
     /// Shared with the footer, so the two can never describe different charts.
     private var scaledToDemand: Bool { carbonScaledToDemand(readings) }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(
-            NSTrackingArea(
-                rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                owner: self))
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        var index: Int?
-        if slotWidth > 0, plotRect.insetBy(dx: 0, dy: -8).contains(point) {
-            let slot = Int((point.x - plotRect.minX) / slotWidth)
-            if slot >= 0 && slot < readings.count { index = slot }
-        }
-        if index != hoverIndex {
-            hoverIndex = index
-            needsDisplay = true
-        }
-    }
-
-    func previewHover(_ index: Int?) {
-        hoverIndex = index
-        needsDisplay = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hoverIndex = nil
-        needsDisplay = true
-    }
-
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.clear.set()
-        dirtyRect.fill()
-        guard !readings.isEmpty else {
-            if let placeholder {
-                label(
-                    placeholder, at: CGPoint(x: bounds.midX, y: bounds.midY - 6), size: 12,
-                    color: .tertiaryLabelColor, align: .centre)
-            }
-            return
-        }
-
+        guard beginDrawing(dirtyRect) else { return }
         // The legend wraps to two rows at narrow widths, so the top inset allows for both.
-        let left: CGFloat = 52, right: CGFloat = 14, top: CGFloat = 58
-        let bottom = plotBottomInset
-        let plot = CGRect(
-            x: left, y: bottom, width: max(10, bounds.width - left - right),
-            height: max(10, bounds.height - top - bottom))
+        let plot = plotArea(top: 58)
         // In the mix view a bar stands at that half hour's GB demand, so the shape shows when the
         // country is actually drawing power. Without demand it falls back to a flat 100%: a share
         // scaled to the tallest column would make an always-100% stack look like it varied.
@@ -167,7 +104,7 @@ final class CarbonChartView: NSView {
 
         slotWidth = plot.width / CGFloat(readings.count)
         drawGrid(plot: plot, axisMax: axisMax, step: axisStep)
-        drawTimeGrid(plot: plot)
+        drawTimeGrid(plot: plot, starts: readings.map(\.start))
         drawColumns(plot: plot, axisMax: axisMax)
         drawGreenLine(plot: plot, axisMax: axisMax)
         drawNowRule(plot: plot)
@@ -175,26 +112,6 @@ final class CarbonChartView: NSView {
         drawLegend()
         plotRect = plot
         if let hoverIndex, hoverIndex < readings.count { drawTooltip(for: hoverIndex, plot: plot) }
-    }
-
-    enum Align {
-        case left, right, centre
-    }
-
-    private func label(
-        _ text: String, at point: CGPoint, size: CGFloat, color: NSColor, align: Align = .left
-    ) {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: size), .foregroundColor: color,
-        ]
-        let string = NSAttributedString(string: text, attributes: attributes)
-        var origin = point
-        switch align {
-        case .left: break
-        case .right: origin.x -= string.size().width
-        case .centre: origin.x -= string.size().width / 2
-        }
-        string.draw(at: origin)
     }
 
     private func drawGrid(plot: CGRect, axisMax: Double, step: Double) {
@@ -234,25 +151,6 @@ final class CarbonChartView: NSView {
             color: .tertiaryLabelColor, align: .right)
     }
 
-    /// Midnight solid, noon dashed and fainter — the same treatment as the half-hourly usage
-    /// chart, so the two windows read the same way.
-    private func drawTimeGrid(plot: CGRect) {
-        let cal = calendar(tz)
-        for (index, reading) in readings.enumerated() where index > 0 {
-            let parts = cal.dateComponents([.hour, .minute], from: reading.start)
-            guard parts.minute == 0, parts.hour == 0 || parts.hour == 12 else { continue }
-            let isMidnight = parts.hour == 0
-            NSColor.separatorColor.withAlphaComponent(isMidnight ? 0.45 : 0.2).setStroke()
-            let line = NSBezierPath()
-            let x = (plot.minX + slotWidth * CGFloat(index)).rounded() + 0.5
-            line.move(to: CGPoint(x: x, y: plot.minY))
-            line.line(to: CGPoint(x: x, y: plot.maxY))
-            line.lineWidth = 1
-            if !isMidnight { line.setLineDash([4, 4], count: 2, phase: 0) }
-            line.stroke()
-        }
-    }
-
     private func drawColumns(plot: CGRect, axisMax: Double) {
         // Half-hourly bars always meet: the strip reads as one shape at any width. A gap once the
         // bars grew wide enough striped the stack and read as a cap on how wide a bar could get.
@@ -262,16 +160,9 @@ final class CarbonChartView: NSView {
             return (edge, max(1, nextEdge - edge))
         }
 
-        // Before any bar, so both neighbours cover the padding; see the usage chart.
         if let hoverIndex, hoverIndex < readings.count {
             let (edge, width) = column(hoverIndex)
-            let pad = min(3, max(0.5, width / 3))
-            NSColor.secondaryLabelColor.withAlphaComponent(0.09).setFill()
-            NSBezierPath(
-                roundedRect: CGRect(
-                    x: edge - pad, y: plot.minY - 3, width: width + pad * 2, height: plot.height + 6),
-                xRadius: min(4, pad * 2), yRadius: min(4, pad * 2)
-            ).fill()
+            drawHoverHighlight(left: edge, width: width, plot: plot)
         }
 
         for (index, reading) in readings.enumerated() {
@@ -491,14 +382,7 @@ func renderCarbonChart(
     view.now = now
     view.placeholder = placeholder
     view.previewHover(hover)
-    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    (dark ? hexColor("#1a1a19") : hexColor("#fcfcfb")).setFill()
-    view.bounds.fill()
-    NSGraphicsContext.restoreGraphicsState()
-    view.cacheDisplay(in: view.bounds, to: rep)
-    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    writePNG(renderOffscreen(view, dark: dark), to: path)
 }
 
 /// A seeded two-day forecast, so the demo images are identical run to run. Shaped like a real

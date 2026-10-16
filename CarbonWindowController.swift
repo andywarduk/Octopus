@@ -12,8 +12,7 @@ final class CarbonWindowController: NSObject {
 
     private var window: NSWindow?
     private var chart: CarbonChartView?
-    private var status: NSTextField?
-    private var statusHeight: NSLayoutConstraint?
+    private var statusLine: StatusLine?
     private var footer: NSTextField?
     private var sourceControl: NSSegmentedControl?
     private var modeControl: NSSegmentedControl?
@@ -37,7 +36,7 @@ final class CarbonWindowController: NSObject {
     private var clock: Timer?
 
     /// The chart's timezone throughout: both sources are British and report in UTC.
-    private let tz = TimeZone(identifier: "Europe/London") ?? .current
+    private let tz = londonTimeZone
 
     init(apiKey: @escaping () -> String?, postcode: @escaping () -> String?) {
         self.apiKey = apiKey
@@ -99,68 +98,18 @@ final class CarbonWindowController: NSObject {
             action: #selector(modeChanged(_:)))
         modes.selectedSegment = 0
 
-        func chevron(_ symbol: String, _ description: String, _ action: Selector) -> NSButton {
-            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
-            let button = image.map { NSButton(image: $0, target: self, action: action) }
-                ?? NSButton(title: description, target: self, action: action)
-            button.bezelStyle = .rounded
-            button.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-            return button
-        }
-        let back = chevron("chevron.left", "Previous week", #selector(previousWeek))
-        let forward = chevron("chevron.right", "Next week", #selector(nextWeek))
-
-        let range = NSTextField(labelWithString: "")
-        range.alignment = .center
-        range.translatesAutoresizingMaskIntoConstraints = false
-        range.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
-
+        let back = chevronButton("chevron.left", "Previous week", target: self, action: #selector(previousWeek))
+        let forward = chevronButton("chevron.right", "Next week", target: self, action: #selector(nextWeek))
+        let range = makeWeekRangeLabel()
         let reload = NSButton(title: "Reload", target: self, action: #selector(reload))
-
-        let statusField = NSTextField(labelWithString: "")
-        statusField.font = .systemFont(ofSize: 11)
-        statusField.textColor = .secondaryLabelColor
-        statusField.maximumNumberOfLines = 2
-        statusField.lineBreakMode = .byTruncatingTail
-        statusField.cell?.wraps = true
-        statusField.cell?.isScrollable = false
-        statusField.translatesAutoresizingMaskIntoConstraints = false
-        statusField.setContentCompressionResistancePriority(.init(249), for: .vertical)
 
         let controls = NSStackView(views: [back, range, forward, sources, modes, reload])
         controls.spacing = 10
-        controls.translatesAutoresizingMaskIntoConstraints = false
-
+        let status = StatusLine()
         let chartView = CarbonChartView()
-        chartView.translatesAutoresizingMaskIntoConstraints = false
-
-        let footerField = NSTextField(labelWithString: "")
-        footerField.font = .systemFont(ofSize: 10)
-        footerField.textColor = .tertiaryLabelColor
-        footerField.translatesAutoresizingMaskIntoConstraints = false
-        footerField.maximumNumberOfLines = 1
-        footerField.lineBreakMode = .byTruncatingTail
-
-        let container = NSView()
-        for view in [controls, statusField, chartView, footerField] { container.addSubview(view) }
-        NSLayoutConstraint.activate([
-            controls.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
-            controls.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            controls.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
-
-            statusField.topAnchor.constraint(equalTo: controls.bottomAnchor, constant: 8),
-            statusField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            statusField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-
-            chartView.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 8),
-            chartView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
-            chartView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
-
-            footerField.topAnchor.constraint(equalTo: chartView.bottomAnchor, constant: 6),
-            footerField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            footerField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            footerField.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
-        ])
+        let footerField = makeFooterField()
+        let container = chartWindowContent(
+            controls: controls, status: status.field, chart: chartView, footer: footerField)
 
         let newWindow = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 780, height: 400),
@@ -173,19 +122,15 @@ final class CarbonWindowController: NSObject {
         newWindow.setContentSize(CGSize(width: 780, height: 400))
         newWindow.contentMinSize = CGSize(width: 620, height: 320)
         newWindow.center()
-        // Offset from the two usage windows so three open windows don't stack exactly.
+        // Offset from the usage windows, which cascade from the centre, so they don't stack exactly.
         var origin = newWindow.frame.origin
         origin.x += 56
         origin.y -= 56
         newWindow.setFrameOrigin(origin)
 
-        let height = statusField.heightAnchor.constraint(equalToConstant: 0)
-        height.isActive = true
-
         window = newWindow
         chart = chartView
-        status = statusField
-        statusHeight = height
+        statusLine = status
         footer = footerField
         sourceControl = sources
         modeControl = modes
@@ -193,7 +138,6 @@ final class CarbonWindowController: NSObject {
         backButton = back
         forwardButton = forward
         updateControls()
-        setStatus("")
     }
 
     // MARK: - Controls
@@ -257,12 +201,7 @@ final class CarbonWindowController: NSObject {
         case .forecast:
             rangeLabel?.stringValue = source == .octopus ? "Next 24 hours" : "Next 48 hours"
         case .week(let back):
-            let window = usageDateWindow(weeksBack: back, days: 7, tz: tz)
-            let cal = calendar(tz)
-            let last = cal.date(byAdding: .day, value: -1, to: window.to) ?? window.to
-            let sameMonth = cal.isDate(window.from, equalTo: last, toGranularity: .month)
-            rangeLabel?.stringValue =
-                "\(formatted(window.from, sameMonth ? "d" : "d MMM", tz)) – \(formatted(last, "d MMM", tz))"
+            rangeLabel?.stringValue = weekRangeText(weeksBack: back, tz: tz)
         }
         // The mix is National Grid's; Octopus never sends one. Fall back rather than showing an
         // empty chart under a selected tab.
@@ -273,12 +212,6 @@ final class CarbonWindowController: NSObject {
             modeControl?.selectedSegment = 0
             chart?.mode = .intensity
         }
-    }
-
-    private func setStatus(_ text: String) {
-        status?.stringValue = text
-        status?.toolTip = text.isEmpty ? nil : text
-        statusHeight?.constant = text.isEmpty ? 0 : 30
     }
 
     /// A stale chart left under an error message reads as current, and after a source change it is
@@ -308,14 +241,14 @@ final class CarbonWindowController: NSObject {
     func load() {
         guard !loading else { return }
         guard let postcode = postcode(), !outwardCode(postcode).isEmpty else {
-            setStatus("No postcode for the selected property — pick a meter in Settings.")
+            statusLine?.show("No postcode for the selected property — pick a meter in Settings.")
             clearChart(placeholder: "No postcode")
             return
         }
-        let key0 = cacheKey(source, period)
-        if let hit = cache[key0], hit.isFresh() {
+        let requestedKey = cacheKey(source, period)
+        if let hit = cache[requestedKey], hit.isFresh() {
             series = hit
-            setStatus("")
+            statusLine?.show("")
             apply()
             return
         }
@@ -323,7 +256,7 @@ final class CarbonWindowController: NSObject {
         series = CarbonSeries()
         clearChart(placeholder: "Loading…")
         loading = true
-        setStatus("Loading…")
+        statusLine?.show("Loading…")
         let requestedSource = source
         let requestedPeriod = period
         let requestedGeneration = generation
@@ -337,16 +270,16 @@ final class CarbonWindowController: NSObject {
                 let fetched = try await fetchCarbon(
                     source: requestedSource, period: requestedPeriod, apiKey: key,
                     postcode: postcode, tz: tz)
-                if requestedGeneration == generation { cache[key0] = fetched }
+                if requestedGeneration == generation { cache[requestedKey] = fetched }
                 if current {
                     series = fetched
                     apply()
-                    setStatus("")
+                    statusLine?.show("")
                 }
             } catch {
                 if requestedSource == .octopus { await invalidateSession(after: error) }
                 if current {
-                    setStatus(error.localizedDescription)
+                    statusLine?.show(error.localizedDescription)
                     series = CarbonSeries()
                     clearChart(placeholder: "No carbon intensity to show")
                     updateControls()
@@ -368,11 +301,10 @@ final class CarbonWindowController: NSObject {
         if let region = series.region { parts.append(region) }
         parts.append(series.outward)
         if mode == .mix {
-            // The average over the window, which is what the legend's percentages are. Coal is
+            // The average over the window, the same figures as the legend's percentages. Coal is
             // still summed although Britain burned its last in 2024 and the figure is now always
             // zero: the API still carries the fuel, and naming the total "fossil" rather than
             // listing the fuels means a restart would be counted without a wording change.
-            // The same averages as the legend.
             let mean = averageMix(series.readings)
             let fossil = (mean[.gas] ?? 0) + (mean[.coal] ?? 0)
             parts.append(String(format: "fossil fuels %.0f%% on average", fossil))

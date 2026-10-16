@@ -5,7 +5,7 @@ import Foundation
 import ServiceManagement
 
 func selfTest() {
-    let tz = TimeZone(identifier: "Europe/London")!
+    let tz = londonTimeZone
     func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
     let snap = Snapshot(
         cheapRate: 6.8999, peakRate: 30.3714, standingCharge: 54.81, windows: fallbackWindows,
@@ -52,7 +52,7 @@ func selfTest() {
     }
 
     print("--- usage banding")
-    let tzLondon = TimeZone(identifier: "Europe/London")!
+    let tzLondon = londonTimeZone
     let midnight = date("2026-09-18T23:00:00Z")   // 00:00 BST on the 19th
     let noon = date("2026-09-19T12:00:00Z")
     let buckets = [
@@ -76,6 +76,10 @@ func selfTest() {
         print("  \(formatted(day.start, "EEE d MMM", tzLondon)): \(parts.joined(separator: ", "))"
             + (day.smartCharge ? "  [smart charge]" : ""))
     }
+    func kwhParts(_ period: UsagePeriod) -> [String] {
+        RateBand.allCases.filter { period.value($0, .kwh) > 0 }
+            .map { "\($0.rawValue) \(formatUsage(period.value($0, .kwh), .kwh))kWh" }
+    }
     // A smart charge inside the off-peak window was cheap anyway, so it stays off-peak; one outside
     // it, or under a tariff whose window is elsewhere, is the cheap time the charge earned.
     let overnightCharge = [
@@ -85,9 +89,7 @@ func selfTest() {
     ]
     for (label, windows) in [("23:30–05:30", fallbackWindows), ("02:00–06:00", [(from: 120, to: 360)])] {
         let day = aggregateUsage(overnightCharge, standing: [], tz: tzLondon, by: .day, offPeakWindows: windows)[0]
-        print("  01:30 smart charge, off-peak \(label): "
-            + RateBand.allCases.filter { day.value($0, .kwh) > 0 }
-                .map { "\($0.rawValue) \(formatUsage(day.value($0, .kwh), .kwh))kWh" }.joined(separator: ", "))
+        print("  01:30 smart charge, off-peak \(label): \(kwhParts(day).joined(separator: ", "))")
     }
     // A daytime dispatch can arrive with no EV bucket, as household use at the off-peak price. On a
     // timetabled tariff that price is the sign; on Agile, with no timetable and no EV buckets, it isn't.
@@ -96,11 +98,9 @@ func selfTest() {
         UsageBucket(start: noon, label: "CONSUMPTION_CHARGE_ECO7_NIGHT_H", kwh: 3.5, pence: 24.1, pricePerUnit: 6.89997),
         UsageBucket(start: date("2026-09-19T15:00:00Z"), label: "CONSUMPTION_CHARGE_ECO7_DAY_H", kwh: 1.0, pence: 30.37, pricePerUnit: 30.37136),
     ]
-    for (label, windows) in [("timetabled", fallbackWindows), ("no timetable", [])] as [(String, [(from: Int, to: Int)])] {
+    for (label, windows) in [("timetabled", fallbackWindows), ("no timetable", [])] as [(String, [TimeWindow])] {
         let day = aggregateUsage(unlabelledDispatch, standing: [], tz: tzLondon, by: .day, offPeakWindows: windows)[0]
-        print("  13:00 dispatch with no EV bucket, \(label): "
-            + RateBand.allCases.filter { day.value($0, .kwh) > 0 }
-                .map { "\($0.rawValue) \(formatUsage(day.value($0, .kwh), .kwh))kWh" }.joined(separator: ", ")
+        print("  13:00 dispatch with no EV bucket, \(label): \(kwhParts(day).joined(separator: ", "))"
             + " — \(smartChargeText(day, granularity: .day, tz: tzLondon) ?? "no smart charge")")
     }
     // A single-rate tariff must not produce a cheap band at all.
@@ -108,10 +108,8 @@ func selfTest() {
     print("  flat tariff threshold: \(priceThreshold(flatBuckets).map { "\($0)" } ?? "none")")
     print("  flat tariff bands: \(Set(flatBuckets.map { band(for: $0, threshold: priceThreshold(flatBuckets)).rawValue }).sorted())")
     for slot in aggregateUsage(buckets, standing: [], tz: tzLondon, by: .halfHour) {
-        let parts = RateBand.allCases.filter { slot.value($0, .kwh) > 0 }
-            .map { "\($0.rawValue) \(formatUsage(slot.value($0, .kwh), .kwh))kWh" }
         print("  half hour \(formatted(slot.start, "HH:mm", tzLondon))–\(formatted(slot.end, "HH:mm", tzLondon)): "
-            + parts.joined(separator: " + ") + (slot.smartCharge ? "  [smart charge]" : ""))
+            + kwhParts(slot).joined(separator: " + ") + (slot.smartCharge ? "  [smart charge]" : ""))
     }
     // A day the API returned nothing for must still get a column.
     let dayOne = date("2026-09-17T23:00:00Z")   // 00:00 BST on the 18th
@@ -166,7 +164,7 @@ func selfTest() {
         for (unit, scale) in [
             (UsageUnit.kwh, Granularity.day), (.money, .day), (.money, .halfHour),
         ] {
-            let shown = visibleBands(unit, scale)
+            let shown = visibleBands(unit)
             let parts = shown.filter { day.value($0, unit) > 0 }
                 .map { "\($0.rawValue) \(formatUsage(day.value($0, unit), unit))" }
             let name = "\(unit == .kwh ? "kWh" : "money")/\(scale == .day ? "day" : "half hour")"

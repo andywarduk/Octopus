@@ -1,4 +1,5 @@
-// The Settings window: entering, saving and removing the API key, and the alert preference.
+// The Settings window: the API key, which electricity meter the menu bar follows, the three
+// alerts and opening at login.
 
 import Cocoa
 
@@ -6,7 +7,7 @@ extension AppDelegate {
     @objc func showSettings() {
         if settingsWindow == nil { buildSettingsWindow() }
         keyField?.stringValue = ""
-        setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
+        showKeySaved()
         removeButton?.isEnabled = apiKey != nil
         notifyCheck?.state = notifyEnabled ? .on : .off
         dispatchCheck?.state = dispatchAlertEnabled ? .on : .off
@@ -159,9 +160,7 @@ extension AppDelegate {
         }
     }
 
-    @objc func toggleDispatchNotify(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: "notifyDispatchChange")
-    }
+    @objc func toggleDispatchNotify(_ sender: NSButton) { dispatchAlertEnabled = sender.state == .on }
 
     @objc func toggleLoginItem(_ sender: NSButton) {
         let wanted = sender.state == .on
@@ -176,17 +175,13 @@ extension AppDelegate {
         if wanted, let advice = LoginItem.advice(for: LoginItem.status) {
             setKeyStatus(advice, warning: true)
         } else {
-            setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
+            showKeySaved()
         }
     }
 
-    @objc func toggleTariffNotify(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: "notifyTariffEnding")
-    }
+    @objc func toggleTariffNotify(_ sender: NSButton) { tariffAlertEnabled = sender.state == .on }
 
-    @objc func toggleNotify(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: "notifyBeforeCheap")
-    }
+    @objc func toggleNotify(_ sender: NSButton) { notifyEnabled = sender.state == .on }
 
     @objc func removeKey() {
         let confirm = NSAlert()
@@ -215,6 +210,11 @@ extension AppDelegate {
         removeButton?.isEnabled = false
         setKeyStatus("Key removed", warning: false)
         updateIcon()
+    }
+
+    /// The resting status line: whether there is a key, with nothing to warn about.
+    func showKeySaved() {
+        setKeyStatus(apiKey == nil ? "No key saved" : "A key is saved in your Keychain", warning: false)
     }
 
     func setKeyStatus(_ text: String, warning: Bool) {

@@ -325,11 +325,7 @@ func parseOctopusCarbon(_ rows: [[String: Any]]) -> [CarbonReading] {
 func fetchRegionalReadings(
     outward: String, period: CarbonPeriod, tz: TimeZone
 ) async throws -> (region: String?, readings: [CarbonReading]) {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(identifier: "UTC")
-    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
-
+    let formatter = minuteStamp.formatter
     let tail: String
     // The window actually asked for, kept so the reply can be trimmed back to it.
     let windowStart: Date
@@ -392,7 +388,7 @@ private func fetchNationalGridCarbon(
         let (demandBySlot, nationalBySlot) = await (demand, national)
         readings = readings.map { reading in
             var updated = reading
-            let key = Int(reading.start.timeIntervalSince1970 / 1800)
+            let key = slotKey(reading.start)
             updated.demandMW = demandBySlot[key]?.mw
             updated.demandIsForecast = demandBySlot[key]?.forecast ?? false
             // The national split is the only one that can be multiplied by GB demand to mean
@@ -416,7 +412,7 @@ private func fetchNationalGridCarbon(
 // Both are national, and neither needs a key. They are fetched alongside the regional intensity
 // so the fuel-mix view can stand bars at their real height rather than a flat 100%.
 
-/// Half-hourly slots keyed to the second, so three sources can be joined by period start.
+/// Half-hour slot numbers since 1970, so three sources can be joined by period start.
 private func slotKey(_ date: Date) -> Int { Int(date.timeIntervalSince1970 / 1800) }
 
 /// Elexon numbers settlement periods from *local* midnight, half hour by half hour, and dates a
@@ -424,29 +420,17 @@ private func slotKey(_ date: Date) -> Int { Int(date.timeIntervalSince1970 / 180
 /// covers it, so the two long days a year do not matter: a neighbouring period identifies the
 /// same publication.
 private func settlementRef(_ date: Date) -> (date: String, period: Int) {
-    let london = TimeZone(identifier: "Europe/London") ?? .current
-    var cal = Calendar(identifier: .gregorian)
-    cal.timeZone = london
-    let midnight = cal.startOfDay(for: date)
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = london
-    formatter.dateFormat = "yyyy-MM-dd"
-    return (formatter.string(from: midnight), Int(date.timeIntervalSince(midnight) / 1800) + 1)
+    let midnight = calendar(londonTimeZone).startOfDay(for: date)
+    return (formatted(midnight, "yyyy-MM-dd", londonTimeZone), Int(date.timeIntervalSince(midnight) / 1800) + 1)
 }
 
 /// GB demand in MW per half hour: settled outturn for the past, day-ahead forecast for the near
 /// future. Both are asked for every time — a window can straddle now, and neither covers the
 /// other's half.
 func fetchGBDemand(from: Date, to: Date) async -> [Int: (mw: Double, forecast: Bool)] {
-    let iso = DateFormatter()
-    iso.locale = Locale(identifier: "en_US_POSIX")
-    iso.timeZone = TimeZone(identifier: "UTC")
-    iso.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
-    let day = DateFormatter()
-    day.locale = Locale(identifier: "en_US_POSIX")
-    day.timeZone = TimeZone(identifier: "UTC")
-    day.dateFormat = "yyyy-MM-dd"
+    let iso = minuteStamp.formatter
+    let utc = TimeZone(identifier: "UTC")!
+    func day(_ date: Date) -> String { formatted(date, "yyyy-MM-dd", utc) }
 
     let base = "https://data.elexon.co.uk/bmrs/api/v1"
     var demand: [Int: (mw: Double, forecast: Bool)] = [:]
@@ -477,8 +461,8 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: (mw: Double, forecast: B
 
     // Settled demand first: it is measurement, and a forecast must never overwrite it.
     if let body = await fetch(
-        "\(base)/demand/outturn?settlementDateFrom=\(day.string(from: from))"
-            + "&settlementDateTo=\(day.string(from: to))&format=json")
+        "\(base)/demand/outturn?settlementDateFrom=\(day(from))"
+            + "&settlementDateTo=\(day(to))&format=json")
     {
         absorb(body, field: "initialDemandOutturn", forecast: false)
     }
@@ -531,10 +515,7 @@ func fetchGBDemand(from: Date, to: Date) async -> [Int: (mw: Double, forecast: B
 /// only a range whose *start* is in the future silently clamps to the last published half hour.
 /// Where a slot is missing, the regional forecast split stands in, and `mixBasis` says which.
 func fetchNationalMix(from: Date, to: Date) async -> [Int: [FuelShare]] {
-    let iso = DateFormatter()
-    iso.locale = Locale(identifier: "en_US_POSIX")
-    iso.timeZone = TimeZone(identifier: "UTC")
-    iso.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
+    let iso = minuteStamp.formatter
     guard
         let url = URL(
             string: "https://api.carbonintensity.org.uk/generation/"

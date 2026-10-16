@@ -29,10 +29,15 @@ struct MeterChoice: Equatable {
     var id: String { "\(fuel.rawValue)|\(accountNumber)|\(propertyId)|\(supplyPoint)" }
 
     var label: String {
-        let place = address.split(separator: ",").first.map(String.init) ?? address
-        let trimmed = place.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? supplyPoint : "\(trimmed) · \(supplyPoint)"
+        let place = firstLine(of: address)
+        return place.isEmpty ? supplyPoint : "\(place) · \(supplyPoint)"
     }
+}
+
+/// The first line of an address — "1 Test Lane" from "1 Test Lane, Corsham, SN13 9XX" — which is
+/// how the menu, the meter picker and the usage windows name a property.
+func firstLine(of address: String) -> String {
+    (address.split(separator: ",").first.map(String.init) ?? "").trimmingCharacters(in: .whitespaces)
 }
 
 enum MeterPreference {

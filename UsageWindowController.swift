@@ -14,15 +14,15 @@ final class UsageWindowController: NSObject {
 
     private var window: NSWindow?
     private var chart: UsageChartView?
-    private var status: NSTextField?
-    private var statusHeight: NSLayoutConstraint?
+    private var statusLine: StatusLine?
     private var footer: NSTextField?
     private var rangeLabel: NSTextField?
     private var forwardButton: NSButton?
     private var scaleControl: NSSegmentedControl?
 
     private var series = UsageSeries()
-    private var cache: [String: CachedUsage] = [:]
+    /// Keyed by week offset: the window's meter never changes, so that is the whole key.
+    private var cache: [Int: CachedUsage] = [:]
     private var weeksBack = 0
     private var granularity: Granularity = .day
     private var loading = false
@@ -75,78 +75,24 @@ final class UsageWindowController: NSObject {
             action: #selector(granularityChanged(_:)))
         scale.selectedSegment = 0
 
-        func chevron(_ symbol: String, _ description: String, _ action: Selector) -> NSButton {
-            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
-            let button = image.map { NSButton(image: $0, target: self, action: action) }
-                ?? NSButton(title: description, target: self, action: action)
-            button.bezelStyle = .rounded
-            button.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-            return button
-        }
-        let back = chevron("chevron.left", "Previous week", #selector(previousWeek))
-        let forward = chevron("chevron.right", "Next week", #selector(nextWeek))
-
-        let range = NSTextField(labelWithString: "")
-        range.alignment = .center
-        range.translatesAutoresizingMaskIntoConstraints = false
-        range.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
-
+        let back = chevronButton("chevron.left", "Previous week", target: self, action: #selector(previousWeek))
+        let forward = chevronButton("chevron.right", "Next week", target: self, action: #selector(nextWeek))
+        let range = makeWeekRangeLabel()
         let reload = NSButton(title: "Reload", target: self, action: #selector(reload))
-
-        let statusField = NSTextField(labelWithString: "")
-        statusField.font = .systemFont(ofSize: 11)
-        statusField.textColor = .secondaryLabelColor
-        // Wrap within the window rather than stretching the controls row off the edge.
-        statusField.maximumNumberOfLines = 2
-        statusField.lineBreakMode = .byTruncatingTail
-        statusField.cell?.wraps = true
-        statusField.cell?.isScrollable = false
-        statusField.translatesAutoresizingMaskIntoConstraints = false
-        // Let the explicit height win when the row is collapsed to nothing.
-        statusField.setContentCompressionResistancePriority(.init(249), for: .vertical)
 
         let controls = NSStackView(views: [back, range, forward, unitPicker, scale, reload])
         controls.spacing = 10
-        controls.translatesAutoresizingMaskIntoConstraints = false
-
+        let status = StatusLine()
         let chartView = UsageChartView()
-        chartView.translatesAutoresizingMaskIntoConstraints = false
-
-        let footerField = NSTextField(labelWithString: "")
-        footerField.font = .systemFont(ofSize: 10)
-        footerField.textColor = .tertiaryLabelColor
-        footerField.translatesAutoresizingMaskIntoConstraints = false
-        // Truncate rather than letting a long line set the window's width.
-        footerField.maximumNumberOfLines = 1
-        footerField.lineBreakMode = .byTruncatingTail
-
-        let container = NSView()
-        for view in [controls, statusField, chartView, footerField] { container.addSubview(view) }
-        NSLayoutConstraint.activate([
-            controls.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
-            controls.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            controls.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
-
-            statusField.topAnchor.constraint(equalTo: controls.bottomAnchor, constant: 8),
-            statusField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            statusField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-
-            chartView.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 8),
-            chartView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
-            chartView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
-
-            footerField.topAnchor.constraint(equalTo: chartView.bottomAnchor, constant: 6),
-            footerField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            footerField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            footerField.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
-        ])
+        let footerField = makeFooterField()
+        let container = chartWindowContent(
+            controls: controls, status: status.field, chart: chartView, footer: footerField)
 
         let newWindow = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 620, height: 380),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         // Named for its address, since two meters of one fuel can be open side by side.
-        let place = meter.address.split(separator: ",").first.map(String.init)?
-            .trimmingCharacters(in: .whitespaces) ?? ""
+        let place = firstLine(of: meter.address)
         newWindow.title = place.isEmpty ? fuel.windowTitle : "\(fuel.windowTitle) · \(place)"
         newWindow.contentView = container
         newWindow.isReleasedWhenClosed = false
@@ -159,19 +105,14 @@ final class UsageWindowController: NSObject {
         origin.y -= CGFloat(28 * cascade)
         newWindow.setFrameOrigin(origin)
 
-        let height = statusField.heightAnchor.constraint(equalToConstant: 0)
-        height.isActive = true
-
         window = newWindow
         chart = chartView
-        status = statusField
-        statusHeight = height
+        statusLine = status
         footer = footerField
         rangeLabel = range
         forwardButton = forward
         scaleControl = scale
         updateRange()
-        setStatus("")
     }
 
     // MARK: - Controls
@@ -200,35 +141,17 @@ final class UsageWindowController: NSObject {
     }
 
     @objc private func reload() {
-        cache[cacheKey(weeksBack)] = nil
+        cache[weeksBack] = nil
         load()
     }
 
-    /// The row collapses when empty, so an error never permanently costs space.
-    private func setStatus(_ text: String) {
-        status?.stringValue = text
-        status?.toolTip = text.isEmpty ? nil : text
-        statusHeight?.constant = text.isEmpty ? 0 : 30
-    }
-
     private func updateRange() {
-        let tz = series.tz
-        let window = usageDateWindow(weeksBack: weeksBack, days: 7, tz: tz)
-        let cal = calendar(tz)
-        let last = cal.date(byAdding: .day, value: -1, to: window.to) ?? window.to
-        let sameMonth = cal.isDate(window.from, equalTo: last, toGranularity: .month)
-        let from = formatted(window.from, sameMonth ? "d" : "d MMM", tz)
-        rangeLabel?.stringValue = "\(from) – \(formatted(last, "d MMM", tz))"
+        rangeLabel?.stringValue = weekRangeText(weeksBack: weeksBack, tz: series.tz)
         // Nothing to show past today, so forward stops at the current week.
         forwardButton?.isEnabled = weeksBack > 0
     }
 
     // MARK: - Data
-
-    /// The window's meter never changes, so the week offset is the whole key.
-    private func cacheKey(_ weeksBack: Int) -> String {
-        "\(weeksBack)"
-    }
 
     /// Re-buckets the series already fetched; changing granularity never refetches.
     private func apply() {
@@ -260,14 +183,14 @@ final class UsageWindowController: NSObject {
         // whether it is still what is wanted, and loads again if not.
         guard !loading else { return }
         guard let key = apiKey() else {
-            setStatus("No API key set — add one in Settings.")
+            statusLine?.show("No API key set — add one in Settings.")
             clearChart(placeholder: "No API key set")
             return
         }
-        let key0 = cacheKey(weeksBack)
-        if let hit = cache[key0], hit.isFresh() {
+        let requested = weeksBack
+        if let hit = cache[requested], hit.isFresh() {
             series = hit.series
-            setStatus("")
+            statusLine?.show("")
             apply()
             return
         }
@@ -275,29 +198,28 @@ final class UsageWindowController: NSObject {
         series = UsageSeries()
         clearChart(placeholder: "Loading…")
         loading = true
-        setStatus("Loading…")
-        let requested = weeksBack
+        statusLine?.show("Loading…")
         let requestedGeneration = generation
         Task {
             // The week, the meter or the key may all have changed while this was in flight.
-            var current: Bool { requestedGeneration == generation && key0 == cacheKey(weeksBack) }
+            var current: Bool { requestedGeneration == generation && requested == weeksBack }
             do {
                 let fetched = try await fetchUsage(apiKey: key, meter: meter, days: 7, weeksBack: requested)
                 // Another week's data is still worth keeping; another meter's or key's is not.
                 if requestedGeneration == generation {
-                    cache[key0] = CachedUsage(
+                    cache[requested] = CachedUsage(
                         series: fetched, fetchedAt: Date(), complete: fetched.isComplete)
                     trimCache()
                 }
                 if current {
                     series = fetched
                     apply()
-                    setStatus("")
+                    statusLine?.show("")
                 }
             } catch {
                 await invalidateSession(after: error)
                 if current {
-                    setStatus(error.localizedDescription)
+                    statusLine?.show(error.localizedDescription)
                     series = UsageSeries()
                     clearChart(placeholder: "No usage to show")
                 }
@@ -327,7 +249,7 @@ final class UsageWindowController: NSObject {
         }
         let unit = chart?.unit ?? .kwh
         let standing = periods.reduce(0) { $0 + $1.standingPence }
-        let shown = visibleBands(unit, granularity)
+        let shown = visibleBands(unit)
         let total = periods.reduce(0) { $0 + $1.total(unit, shown) }
         let label = series.energyLabel
         // Say what a bar is: per half hour, energy is half the power drawn — 7 kW reads 3.5 kWh.

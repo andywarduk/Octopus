@@ -11,7 +11,6 @@ struct ApiError: Error, LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Drops the cached token and meters unless the error is known not to concern them.
 /// Whether a failure is this Mac's network rather than Octopus's answer: asleep, just woken, or
 /// between networks. Such failures say nothing about the key or the token, so they neither drop the
 /// session nor count toward stopping automatic refreshes.
@@ -24,6 +23,7 @@ func isOffline(_ error: Error) -> Bool {
     return offline.contains(code)
 }
 
+/// Drops the cached token and meters unless the error is known not to concern them.
 func invalidateSession(after error: Error) async {
     if (error as? ApiError)?.invalidatesSession == false || isOffline(error) { return }
     await OctopusSession.shared.invalidate()
@@ -149,12 +149,12 @@ actor OctopusSession {
     }
 }
 
-let fallbackWindows = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
+let fallbackWindows: [TimeWindow] = [(from: 23 * 60 + 30, to: 5 * 60 + 30)]
 
 /// The off-peak windows a `timeOfUseScheme` states, in minutes after local midnight. Empty when it
 /// states none: Agile, for one, has no timetable.
-func offPeakWindows(_ scheme: [String: Any]?) -> [(from: Int, to: Int)] {
-    var windows: [(from: Int, to: Int)] = []
+func offPeakWindows(_ scheme: [String: Any]?) -> [TimeWindow] {
+    var windows: [TimeWindow] = []
     for slot in (scheme?["timeslots"] as? [[String: Any]]) ?? [] {
         let name = (slot["timeslot"] as? String ?? "").lowercased()
         guard ["off", "cheap", "night"].contains(where: name.contains),
@@ -167,7 +167,7 @@ func offPeakWindows(_ scheme: [String: Any]?) -> [(from: Int, to: Int)] {
 }
 
 /// Whether `instant` falls in one of `windows`, which may run across midnight.
-func inWindows(_ instant: Date, _ windows: [(from: Int, to: Int)], cal: Calendar) -> Bool {
+func inWindows(_ instant: Date, _ windows: [TimeWindow], cal: Calendar) -> Bool {
     let minute = cal.component(.hour, from: instant) * 60 + cal.component(.minute, from: instant)
     return windows.contains { w in
         w.from < w.to ? (w.from <= minute && minute < w.to) : (minute >= w.from || minute < w.to)
@@ -183,10 +183,8 @@ func inWindows(_ instant: Date, _ windows: [(from: Int, to: Int)], cal: Calendar
 func parseTariffEnds(_ account: [String: Any], accountNumber: String = "", now: Date) -> [TariffEnd] {
     var found: [TariffEnd] = []
     for property in (account["properties"] as? [[String: Any]]) ?? [] {
-        // The first line of the address, as the meter picker shows it.
         let address = property["address"] as? String ?? ""
-        let place = address.split(separator: ",").first.map(String.init)?
-            .trimmingCharacters(in: .whitespaces) ?? ""
+        let place = firstLine(of: address)
         for (field, fuel) in [("electricityMeterPoints", Fuel.electricity), ("gasMeterPoints", .gas)] {
             for point in (property[field] as? [[String: Any]]) ?? [] {
                 // The meter behind the agreement, so the menu can open its usage from the tariff
@@ -256,6 +254,16 @@ func todaysChargeGoal(_ preferences: [String: Any]?, now: Date, tz: TimeZone) ->
     return (isPercentage ? value.map { Int($0.rounded()) } : nil, minutes(schedule["time"] as? String ?? ""))
 }
 
+/// The VAT a tariff charges, read off its standing charge with and without tax — the API states no
+/// rate, and it changes (0% on GB electricity from October 2026 to March 2027). Only used to gross
+/// up the rare tariff that has no stated rates, since applicableRates quotes prices before tax
+/// while everything else on screen includes it. Rounded to the nearest half percent — fine enough
+/// for a rate like 17.5%, coarse enough that rounding in either figure can't leak in.
+func vatMultiplier(standingCharge: Double?, preVat: Double?) -> Double? {
+    guard let withVat = standingCharge, let preVat, preVat > 0 else { return nil }
+    return (withVat / preVat * 200).rounded() / 200
+}
+
 /// The slow-moving half of a snapshot: prices, schedule, balance and agreements. Fetched hourly,
 /// or on demand, rather than on every refresh — it changes a few times a year, and fetching it
 /// every five minutes was a third of the app's background requests.
@@ -269,7 +277,7 @@ struct TariffState {
     var standingCharge: Double?
     /// From the standing charge's with- and without-VAT figures; grosses up applicableRates.
     var vatMultiplier: Double?
-    var windows: [(from: Int, to: Int)]
+    var windows: [TimeWindow]
     var tz: TimeZone
     var balancePence: Int?
     var projectedBalancePence: Int?
@@ -301,7 +309,7 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
     else { throw ApiError(message: "No active agreement for meter \(mpan)") }
 
     let scheme = agreement["timeOfUseScheme"] as? [String: Any]
-    let tz = TimeZone(identifier: scheme?["timezone"] as? String ?? "") ?? TimeZone(identifier: "Europe/London")!
+    let tz = TimeZone(identifier: scheme?["timezone"] as? String ?? "") ?? londonTimeZone
     let stated = offPeakWindows(scheme)
     let windows = stated.isEmpty ? fallbackWindows : stated
 
@@ -310,12 +318,12 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
     let tariffRates = ["unitRate", "dayRate", "nightRate", "offPeakRate", "evDevicePeakRate", "evDeviceOffPeakRate"]
         .compactMap { toDouble(tariff[$0]) }
         .filter { $0 > 0 }
+    let standingCharge = toDouble(tariff["standingCharge"])
 
     return TariffState(
         accountNumber: account, mpan: mpan, cheapRate: tariffRates.min(), peakRate: tariffRates.max(),
-        standingCharge: toDouble(tariff["standingCharge"]),
-        vatMultiplier: vatMultiplier(
-            standingCharge: toDouble(tariff["standingCharge"]), preVat: toDouble(tariff["preVatStandingCharge"])),
+        standingCharge: standingCharge,
+        vatMultiplier: vatMultiplier(standingCharge: standingCharge, preVat: toDouble(tariff["preVatStandingCharge"])),
         windows: windows, tz: tz,
         balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
         projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
