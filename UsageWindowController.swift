@@ -258,9 +258,13 @@ final class UsageWindowController: NSObject {
             ? "\(periods.count) days · each bar is one day"
             : "\(periods.count) half hours · each bar is 30 minutes of energy, not power"
         var text = "\(scale) · \(formatUsage(total, unit, withUnit: true, energyLabel: label)) total"
+        let noun = granularity == .day ? "day" : "half hour"
+        let provisional = periods.filter(\.provisional).count
+        if provisional > 0 {
+            text += " · \(provisional) \(noun)\(provisional == 1 ? "" : "s") from the Home Mini until Octopus publishes"
+        }
         let pending = periods.filter { !$0.hasData }.count
         if pending > 0 {
-            let noun = granularity == .day ? "day" : "half hour"
             text += " · \(pending) \(noun)\(pending == 1 ? "" : "s") not published yet"
         }
         if !series.supportsHalfHour {

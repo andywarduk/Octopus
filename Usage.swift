@@ -57,6 +57,11 @@ struct UsagePeriod {
     /// The API returned something for this period. False means not published yet, which is not
     /// the same as having used nothing — Octopus runs roughly two days behind.
     var hasData = false
+    /// Half hours in this period that came from the Home Mini because Octopus hasn't published
+    /// them. Any at all makes the period provisional: drawn faded, and never counted as settled.
+    var homeMiniHalfHours = 0
+
+    var provisional: Bool { homeMiniHalfHours > 0 }
 
     func value(_ band: RateBand, _ unit: UsageUnit) -> Double {
         // The standing charge buys no energy, so it has no place on a kWh axis.
@@ -114,6 +119,9 @@ struct UsageSeries {
     /// The meter's off-peak timetable, which separates off-peak from smart-charge cheap time.
     /// Empty when the tariff states none.
     var offPeakWindows: [TimeWindow] = []
+    /// Half hours filled in from the Home Mini, by start. Their buckets and standing charges are in
+    /// the lists above like any other; this is what marks them as not yet published.
+    var homeMiniSlots: Set<Date> = []
 
     /// Zero consumption is data, so emptiness is about readings rather than usage.
     var isEmpty: Bool { readings == 0 }
@@ -122,14 +130,16 @@ struct UsageSeries {
     /// at: a day counts as published the moment its first half hour arrives.
     var nativeGranularity: Granularity { supportsHalfHour ? .halfHour : .day }
 
-    /// Settled: every period the window asked for has arrived, so nothing more can turn up.
-    /// Judged per half hour, or a part-published day would look finished and be cached for good.
-    var isComplete: Bool { periods(nativeGranularity).allSatisfy(\.hasData) }
+    /// Settled: every period the window asked for has arrived from Octopus, so nothing more can
+    /// turn up. Judged per half hour, or a part-published day would look finished and be cached for
+    /// good — and a Home Mini stand-in is not Octopus's figure, so it doesn't count.
+    var isComplete: Bool { periods(nativeGranularity).allSatisfy { $0.hasData && !$0.provisional } }
 
     func periods(_ granularity: Granularity) -> [UsagePeriod] {
         aggregateUsage(
             buckets, standing: standing, tz: tz, by: granularity,
-            window: from.flatMap { start in to.map { (start, $0) } }, offPeakWindows: offPeakWindows)
+            window: from.flatMap { start in to.map { (start, $0) } }, offPeakWindows: offPeakWindows,
+            homeMiniSlots: homeMiniSlots)
     }
 }
 
@@ -137,7 +147,7 @@ struct UsageSeries {
 func aggregateUsage(
     _ buckets: [UsageBucket], standing: [(start: Date, pence: Double)], tz: TimeZone,
     by granularity: Granularity = .day, window: (from: Date, to: Date)? = nil,
-    offPeakWindows: [TimeWindow] = []
+    offPeakWindows: [TimeWindow] = [], homeMiniSlots: Set<Date> = []
 ) -> [UsagePeriod] {
     let cal = calendar(tz)
     let threshold = priceThreshold(buckets)
@@ -197,7 +207,101 @@ func aggregateUsage(
         entry.hasData = true
         periods[start] = entry
     }
+    for slot in homeMiniSlots {
+        let (start, end) = bounds(slot)
+        var entry = periods[start] ?? UsagePeriod(start: start, end: end)
+        entry.homeMiniHalfHours += 1
+        periods[start] = entry
+    }
     return periods.values.sorted { $0.start < $1.start }
+}
+
+// MARK: - Filling the unpublished tail from a Home Mini
+
+/// Half hours in the window Octopus hasn't published and that have already ended — what a Home
+/// Mini can stand in for. Judged at the meter's own granularity, so a daily meter's missing day
+/// counts as all of its half hours. The half hour still running is left out: its reading is not in.
+func unpublishedHalfHours(_ series: UsageSeries, now: Date) -> [Date] {
+    var slots: [Date] = []
+    for period in series.periods(series.nativeGranularity) where !period.hasData {
+        var slot = period.start
+        while slot < period.end, slot.addingTimeInterval(1800) <= now {
+            slots.append(slot)
+            slot = slot.addingTimeInterval(1800)
+        }
+    }
+    return slots
+}
+
+/// What marks a bucket as the Home Mini's rather than Octopus's.
+let homeMiniBucketLabel = "HOME_MINI"
+
+/// The Home Mini's half-hourly rows as stand-ins for the half hours in `missing`, and only those:
+/// anything Octopus has published wins. Pure, so `--selftest` can cover it.
+///
+/// Energy arrives in Wh and is converted to kWh. Cost arrives in pence including VAT, the same
+/// basis as the published figures; a row without one is priced at `fallbackPrice`, the last unit
+/// price Octopus published. Telemetry carries no standing charge, so each half hour is given
+/// `standingPerHalfHour`, the last one published — which also keeps a half hour that used nothing
+/// counting as data rather than as unpublished, since zero usage is data.
+func homeMiniFill(
+    rows: Any?, missing: Set<Date>, standingPerHalfHour: Double, fallbackPrice: Double?
+) -> (buckets: [UsageBucket], standing: [(start: Date, pence: Double)], slots: Set<Date>) {
+    var buckets: [UsageBucket] = []
+    var standing: [(start: Date, pence: Double)] = []
+    var slots: Set<Date> = []
+    for case let row as [String: Any] in (rows as? [Any]) ?? [] {
+        guard let start = parseDate(row["readAt"]), missing.contains(start), !slots.contains(start),
+            let wh = toDouble(row["consumptionDelta"])
+        else { continue }
+        slots.insert(start)
+        standing.append((start, standingPerHalfHour))
+        let kwh = wh / 1000
+        guard kwh > 0 else { continue }
+        guard let pence = toDouble(row["costDeltaWithTax"]) ?? fallbackPrice.map({ $0 * kwh }) else { continue }
+        buckets.append(
+            UsageBucket(start: start, label: homeMiniBucketLabel, kwh: kwh, pence: pence, pricePerUnit: pence / kwh))
+    }
+    return (buckets, standing, slots)
+}
+
+/// Fills a gas week's unpublished tail from its Home Mini, in one request. Returns the series
+/// unchanged when there is nothing to fill or the fill can't be trusted to match — and on any
+/// failure: like demand on the carbon chart, this is a garnish, and a week of published data is
+/// not lost because the Mini's request failed.
+///
+/// Gas only. Electricity telemetry carries no cost at all, so its stand-ins could show energy but
+/// not what it cost, and its bands need the tariff's rates. And only in kWh: telemetry is energy,
+/// and a meter publishing in cubic metres can't be joined to it without a calorific value.
+func fillFromHomeMini(_ series: UsageSeries, meter: MeterChoice, token: String, now: Date = Date()) async
+    -> UsageSeries
+{
+    guard meter.fuel == .gas, series.energyLabel == "kWh", let device = meter.homeMiniDevice else { return series }
+    let missing = unpublishedHalfHours(series, now: now)
+    guard let first = missing.first, let last = missing.last else { return series }
+    guard
+        let data = try? await gql(
+            """
+            query($d:String!,$s:DateTime!,$e:DateTime!){
+              smartMeterTelemetry(deviceId:$d,start:$s,end:$e,grouping:HALF_HOURLY){readAt consumptionDelta costDeltaWithTax}
+            }
+            """,
+            ["d": device, "s": iso8601(first), "e": iso8601(last.addingTimeInterval(1800))], token: token)
+    else { return series }
+
+    // The last published figures, to carry into the half hours that have none of their own.
+    let lastStanding = series.standing.max { $0.start < $1.start }?.pence ?? 0
+    let lastPrice = series.buckets.max { $0.start < $1.start }?.pricePerUnit
+    let fill = homeMiniFill(
+        rows: data["smartMeterTelemetry"], missing: Set(missing),
+        // A daily meter publishes the day's whole standing charge on one reading.
+        standingPerHalfHour: series.supportsHalfHour ? lastStanding : lastStanding / 48,
+        fallbackPrice: lastPrice)
+    var filled = series
+    filled.buckets += fill.buckets
+    filled.standing += fill.standing
+    filled.homeMiniSlots = fill.slots
+    return filled
 }
 
 /// Smart-charge half hours joined into runs wherever one follows straight on from the last.
@@ -423,8 +527,9 @@ func fetchUsage(apiKey: String, meter choice: MeterChoice, days: Int, weeksBack:
     }
     // "kwh" from the API reads better as "kWh"; anything else (m3) is shown as given.
     let label = (result.unit?.lowercased() == "kwh" ? "kWh" : result.unit) ?? fuel.defaultEnergyLabel
-    return UsageSeries(
+    let published = UsageSeries(
         buckets: result.buckets, standing: result.standing, tz: tz, from: windowStart, to: windowEnd,
         energyLabel: label, supportsHalfHour: supportsHalfHour, readings: result.readings,
         offPeakWindows: windows)
+    return await fillFromHomeMini(published, meter: choice, token: token)
 }

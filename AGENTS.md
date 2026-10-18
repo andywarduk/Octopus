@@ -46,6 +46,8 @@ nothing into one that didn't exist, without saying so, which reads as every imag
 `--chartdemo` renders the carbon chart as `carbon-*.png` alongside the usage ones. Its `now` rule
 is fixed rather than read from the clock, or the images differ run to run and a diff means nothing.
 The live power chart is `live-*.png`, from a seeded house at a fixed `now` for the same reason.
+`gas-*.png` is a seeded gas week whose unpublished tail is filled from a Home Mini, through the
+app's own `homeMiniFill`, so the faded provisional columns can be checked in both themes.
 
 `--chartdemo` also counts antialiased seams between half-hourly bars — pixels that are neither the
 surface nor a band colour. A handful is expected, at the edges of the deliberate no-readings gap
@@ -67,8 +69,9 @@ wording, carbon parsing, cleanest and the mean mix, the mix basis wording and me
 dispatch alert cooldown, a failed device query, the refresh split and its queries, page sizes and completeness across a clock change,
 tariff-end wording, login-item wording, live power (finding the meters with a Home Mini, the
 newest reading, tolerated errors, its wording and placement), the live power window's slots
-(placement, the five-minute bucket still filling, energy, peak, when a refresh is due), and the
-menu text at three moments.
+(placement, the five-minute bucket still filling, energy, peak, when a refresh is due), gas filled
+from the Home Mini (which meter, which half hours, the stand-ins and what they cost, provisional and
+never complete), and the menu text at three moments.
 
 ### Verifying UI changes without a display
 
@@ -93,7 +96,7 @@ settled by rendering it at a much lower value and confirming the difference.
 | `Keychain.swift` | Reading, saving and removing the API key |
 | `MeterSelection.swift` | Fuels, discovering meters per property, saved choice per fuel |
 | `OctopusAPI.swift` | GraphQL transport, the shared session cache, and the tariff and device halves of a `Snapshot` |
-| `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch |
+| `Usage.swift` | Usage model, banding, aggregation, the measurements query and fetch, and filling unpublished gas from a Home Mini |
 | `ChartView.swift` | What both charts share: the `ChartView` base class, the tooltip box, axis scaling, the offscreen render |
 | `ChartWindow.swift` | What both chart windows share: chevrons, week range, status line, footer, layout |
 | `UsageChart.swift` | The stacked column chart, its palette, and the offscreen renderer |
@@ -320,6 +323,7 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   observed two-day correction, not a published limit.
 - **Readings lag by roughly two days.** The current week always has a blank tail. Distinguish
   "not published" from "used nothing": both look like zero, and only the first should be a gap.
+  A gas meter with a Home Mini has that tail filled in, provisionally — see below.
 - **Zero usage is data.** A meter reporting all zeros still returns readings and standing charges.
   Decide emptiness on reading count, never on consumption, or an unused supply reports as an error.
 
@@ -346,7 +350,8 @@ Built in Swift 6 language mode, so the usual traps apply:
 Octopus rate-limits by query complexity and an hourly point allowance. A menu-bar refresh runs
 every five minutes, every 30 seconds near a rate switch, and on opening the menu if the data is
 over a minute old. It normally costs **one** request; it used to cost six. A usage window costs one
-request per day fetched — seven per week. These keep that in check and should not be undone
+request per day fetched — seven per week — and a gas week with a Home Mini and an unpublished tail
+one more, for the telemetry that fills it. These keep that in check and should not be undone
 lightly:
 
 - **The Kraken token and the discovered meters are shared** through `OctopusSession`. Every
@@ -570,6 +575,26 @@ against real data. Treat those paths as unverified.
   keeps the last reading at its own time, through `carryForwardDevices`, rather than claiming the
   Mini has gone quiet. Negative demand is worded as exporting; that is unverified, since the
   development account has no generation.
+- **Gas Octopus hasn't published is filled from the Home Mini, and marked as provisional.**
+  `fillFromHomeMini` finds the half hours that are unpublished and already over, asks telemetry for
+  them at `HALF_HOURLY` in one request, and adds a bucket for each — energy from
+  `consumptionDelta`, cost from `costDeltaWithTax`, which is pence including VAT like the published
+  figures. Telemetry has no standing charge, so each stand-in carries the last one published; that
+  also keeps a half hour that used nothing counting as data, since zero usage is data. Only what
+  is missing is filled: a published figure always wins, and the next fetch replaces stand-ins as
+  Octopus catches up. They are drawn faded with their own legend key and tooltip line, and
+  `isComplete` ignores them, so a week is never cached as settled on the Mini's numbers. Rules:
+  - **Gas only.** Electricity telemetry carries no cost, and its bands need the tariff's rates.
+  - **kWh only.** Telemetry is energy; a meter publishing cubic metres would need a calorific
+    value to join it, so it is left alone. The development account's gas unit is unconfirmed.
+  - **Only an unambiguous meter.** The network lists devices, not supply points, so the GSME is
+    taken only when the property has one gas meter and its network one GSME. It reaches the usage
+    window as `MeterChoice.homeMiniDevice`, set from the tariff listing — meter discovery leaves it
+    nil, and it is not part of `id`, so pairing a Mini doesn't orphan a saved choice.
+  - **A garnish.** A failed telemetry request leaves the week as published rather than failing it.
+  - **Not quite simultaneous.** A gas reading lands in the half hour the meter woke in, so a
+    stand-in mostly holds the half hour before it. Fine for a day's total; a half-hourly bar can
+    sit up to thirty minutes late.
 - **The live power chart is a line, not columns**, unlike the other two: 360 ten-second readings
   are one continuous quantity, not periods to compare. A 2pt line over a 10% wash of the palette's
   first slot, no legend for a single series, a crosshair and tooltip on hover. What a point means

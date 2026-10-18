@@ -989,6 +989,66 @@ func selfTest() {
     print("    nothing back: empty \(liveSeries(rows: [] as [Any], range: .day, now: windowNow).isEmpty), "
         + "null \(liveSeries(rows: NSNull(), range: .day, now: windowNow).isEmpty)")
 
+    // Gas Octopus hasn't published yet, filled in from a Home Mini: which meter, which half hours,
+    // and what the stand-ins are worth.
+    print("  gas from the Home Mini:")
+    let miniHouse: [String: Any] = [
+        "electricityMeterPoints": [["mpan": "1000", "direction": "IMPORT"], ["mpan": "1001", "direction": "EXPORT"]],
+        "gasMeterPoints": [["mprn": "9000"]],
+        "smartDeviceNetworks": [["smartDevices": [
+            ["deviceId": "E1", "type": "ESME", "status": "COMMISSIONED"],
+            ["deviceId": "G1", "type": "GSME", "status": "COMMISSIONED"],
+            ["deviceId": "C1", "type": "CAD", "status": "NOT_APPLICABLE"],
+        ]]],
+    ]
+    var twoGas = miniHouse
+    twoGas["gasMeterPoints"] = [["mprn": "9000"], ["mprn": "9001"]]
+    var noMini = miniHouse
+    noMini["smartDeviceNetworks"] = [["smartDevices": [["deviceId": "G1", "type": "GSME", "status": "COMMISSIONED"]]]]
+    print("    device: gas \(homeMiniDevice(for: .gas, in: miniHouse) ?? "none"), "
+        + "electricity beside an export meter \(homeMiniDevice(for: .electricity, in: miniHouse) ?? "none"), "
+        + "two gas meters \(homeMiniDevice(for: .gas, in: twoGas) ?? "none"), "
+        + "no Mini \(homeMiniDevice(for: .gas, in: noMini) ?? "none")")
+    // One day, published to 20:00 local; it is 23:10, so 20:00–23:00 has ended and 23:00 has not.
+    let gasDay = date("2026-09-24T23:00:00Z")
+    var gasSeries = UsageSeries(
+        buckets: [UsageBucket(start: gasDay, label: "CONSUMPTION_CHARGE", kwh: 2.0, pence: 16.34, pricePerUnit: 8.17)],
+        standing: (0..<40).map { (gasDay.addingTimeInterval(Double($0) * 1800), 1.03) },
+        tz: tzLondon, from: gasDay, to: gasDay.addingTimeInterval(86400), readings: 40)
+    let gasNow = gasDay.addingTimeInterval(46 * 1800 + 600)
+    let missingSlots = unpublishedHalfHours(gasSeries, now: gasNow)
+    print("    unpublished and ended: \(missingSlots.count) half hours, "
+        + "\(missingSlots.first.map { formatted($0, "HH:mm", tzLondon) } ?? "-")–"
+        + "\(missingSlots.last.map { formatted($0.addingTimeInterval(1800), "HH:mm", tzLondon) } ?? "-")")
+    func slotTime(_ index: Int) -> String { iso8601(gasDay.addingTimeInterval(Double(index) * 1800)) }
+    let gasFill = homeMiniFill(
+        rows: [
+            // Published already: Octopus's figure wins.
+            ["readAt": slotTime(10), "consumptionDelta": "9999.00", "costDeltaWithTax": "81.67"],
+            ["readAt": slotTime(40), "consumptionDelta": "4275.06", "costDeltaWithTax": "34.9167"],
+            // Used nothing: still data, with its standing charge.
+            ["readAt": slotTime(41), "consumptionDelta": "0.00", "costDeltaWithTax": "0E-7"],
+            // No cost: priced at the last published rate.
+            ["readAt": slotTime(42), "consumptionDelta": "1.5E+3", "costDeltaWithTax": NSNull()],
+            // The same half hour twice: counted once.
+            ["readAt": slotTime(42), "consumptionDelta": "1500.00"],
+        ] as [Any],
+        missing: Set(missingSlots), standingPerHalfHour: 1.03, fallbackPrice: 8.17)
+    print("    stand-ins: \(gasFill.slots.count) half hours, buckets "
+        + "\(gasFill.buckets.map { String(format: "%.3f kWh £%.4f", $0.kwh, $0.pence / 100) }), "
+        + "standing \(gasFill.standing.count)")
+    gasSeries.buckets += gasFill.buckets
+    gasSeries.standing += gasFill.standing
+    gasSeries.homeMiniSlots = gasFill.slots
+    let gasDayPeriod = gasSeries.periods(.day)[0]
+    print("    the day: \(String(format: "%.2f", gasDayPeriod.total(.kwh))) kWh, "
+        + "\(gasDayPeriod.homeMiniHalfHours) half hours from the Mini, provisional \(gasDayPeriod.provisional), "
+        + "complete \(gasSeries.isComplete)")
+    let gasHalfHours = gasSeries.periods(.halfHour)
+    print("    half hours: \(gasHalfHours.filter(\.provisional).count) provisional, "
+        + "\(gasHalfHours.filter { !$0.hasData }.count) still unpublished, "
+        + "zero-use stand-in has data \(gasHalfHours[41].hasData)")
+
     // The alert fires in both directions now, so the rule has to name the right one. A merged
     // window must not produce a change in its middle, where nothing actually changes.
     // The icon: shape for carbon, fill (and colour) for the cheap rate, the bolt when carbon is

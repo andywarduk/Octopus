@@ -211,7 +211,7 @@ func parseTariffEnds(_ account: [String: Any], accountNumber: String = "", now: 
                     return MeterChoice(
                         fuel: fuel, accountNumber: accountNumber, propertyId: propertyId,
                         address: address, postcode: property["postcode"] as? String ?? "",
-                        supplyPoint: supply)
+                        supplyPoint: supply, homeMiniDevice: homeMiniDevice(for: fuel, in: property))
                 }
                 for agreement in (point["agreements"] as? [[String: Any]]) ?? [] {
                     let ends = parseDate(agreement["validTo"])
@@ -243,29 +243,53 @@ func parseTariffEnds(_ account: [String: Any], accountNumber: String = "", now: 
     }
 }
 
-/// The meters that can report live power: an electricity meter (ESME) on a home area network that
-/// also has a Home Mini (a CAD). Without the Mini, telemetry answers with no rows and no error, so
-/// asking for it would only add to the query. The Mini reports `NOT_APPLICABLE` while working
-/// perfectly, so nothing is filtered on `COMMISSIONED`; only devices taken off the network drop out.
-func parseLiveMeters(_ account: [String: Any]) -> [LiveMeter] {
+/// The objects in a JSON list, skipping nulls: a list whose items are nullable can hold some, and
+/// casting it straight to `[[String: Any]]` would then drop the whole list.
+private func objects(_ any: Any?) -> [[String: Any]] {
+    ((any as? [Any]) ?? []).compactMap { $0 as? [String: Any] }
+}
+
+/// The devices on a property's home area networks that share a network with a Home Mini (a CAD),
+/// as (type, device id). Telemetry answers only for these: without the Mini it returns no rows and
+/// no error. The Mini reports `NOT_APPLICABLE` while working perfectly, so nothing is filtered on
+/// `COMMISSIONED`; only devices taken off the network drop out.
+func homeMiniDevices(_ property: [String: Any]) -> [(type: String, deviceId: String)] {
     let gone: Set<String> = ["DECOMMISSIONED", "WITHDRAWN"]
-    func objects(_ any: Any?) -> [[String: Any]] { ((any as? [Any]) ?? []).compactMap { $0 as? [String: Any] } }
-    var found: [LiveMeter] = []
-    for property in objects(account["properties"]) {
-        let place = firstLine(of: property["address"] as? String ?? "")
-        for network in objects(property["smartDeviceNetworks"]) {
-            let devices = objects(network["smartDevices"]).filter {
-                !gone.contains(($0["status"] as? String ?? "").uppercased())
-            }
-            func type(_ device: [String: Any]) -> String { (device["type"] as? String ?? "").uppercased() }
-            guard devices.contains(where: { ["CAD", "IHD_OR_CAD"].contains(type($0)) }) else { continue }
-            for device in devices where type(device) == "ESME" {
-                guard let id = device["deviceId"] as? String else { continue }
-                found.append(LiveMeter(deviceId: id, property: place))
-            }
+    var found: [(type: String, deviceId: String)] = []
+    for network in objects(property["smartDeviceNetworks"]) {
+        let devices = objects(network["smartDevices"]).filter {
+            !gone.contains(($0["status"] as? String ?? "").uppercased())
+        }
+        func type(_ device: [String: Any]) -> String { (device["type"] as? String ?? "").uppercased() }
+        guard devices.contains(where: { ["CAD", "IHD_OR_CAD"].contains(type($0)) }) else { continue }
+        for device in devices {
+            guard let id = device["deviceId"] as? String else { continue }
+            found.append((type(device), id))
         }
     }
     return found
+}
+
+/// The meters that can report live power: each electricity meter (ESME) on a network with a Mini.
+func parseLiveMeters(_ account: [String: Any]) -> [LiveMeter] {
+    objects(account["properties"]).flatMap { property in
+        let place = firstLine(of: property["address"] as? String ?? "")
+        return homeMiniDevices(property).filter { $0.type == "ESME" }.map {
+            LiveMeter(deviceId: $0.deviceId, property: place)
+        }
+    }
+}
+
+/// The device id of the one meter of `fuel` on a property's network with a Mini, so its usage can
+/// be filled in from telemetry before Octopus publishes it. Nil unless it is unambiguous: the
+/// network lists devices, not supply points, so with two gas meters at one address there is no
+/// telling which is which.
+func homeMiniDevice(for fuel: Fuel, in property: [String: Any]) -> String? {
+    let field = fuel == .electricity ? "electricityMeterPoints" : "gasMeterPoints"
+    let points = objects(property[field]).filter { ($0["direction"] as? String)?.uppercased() != "EXPORT" }
+    let meters = homeMiniDevices(property).filter { $0.type == (fuel == .electricity ? "ESME" : "GSME") }
+    guard points.count == 1, meters.count == 1 else { return nil }
+    return meters[0].deviceId
 }
 
 /// How far back the live power query looks. The Mini reports every ten seconds, so five minutes

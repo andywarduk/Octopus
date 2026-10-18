@@ -24,6 +24,11 @@ struct MeterChoice: Equatable {
     var postcode: String = ""
     /// MPAN for electricity, MPRN for gas.
     var supplyPoint: String
+    /// The meter's own smart device id when its home area network has a Home Mini, so the days
+    /// Octopus hasn't published yet can be filled in from telemetry. Only the tariff listing knows
+    /// it; a choice from meter discovery leaves it nil. Not part of `id`, which must not change
+    /// when a Mini is paired.
+    var homeMiniDevice: String? = nil
 
     /// Stable across launches, so a saved preference survives reordering.
     var id: String { "\(fuel.rawValue)|\(accountNumber)|\(propertyId)|\(supplyPoint)" }

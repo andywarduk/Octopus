@@ -134,7 +134,11 @@ final class UsageChartView: ChartView {
                 // total height still reads true against the axis.
                 let height = max(1, full - (isTop ? 0 : segmentGap))
                 let rect = CGRect(x: left, y: y, width: width, height: height)
-                SeriesColor.of(band, dark: isDark).setFill()
+                // Faded where the Home Mini stands in for figures Octopus hasn't published: the
+                // same band, so it still reads as the same kind of use, but plainly not final. The
+                // legend and the tooltip say so in words, so the shade never carries it alone.
+                let shade = SeriesColor.of(band, dark: isDark)
+                (period.provisional ? shade.withAlphaComponent(provisionalAlpha) : shade).setFill()
                 // Only the data end is rounded; everything below stays square on the baseline.
                 // Half-hourly bars meet, so rounding each top would notch the strip between them.
                 let path = granularity == .day && isTop && height > 4 && width >= 8
@@ -206,19 +210,36 @@ final class UsageChartView: ChartView {
         return path
     }
 
+    /// How strongly a provisional column is drawn: light enough to read as not final, while the
+    /// band's hue still shows through against both surfaces.
+    private var provisionalAlpha: CGFloat { 0.45 }
+
     private func drawLegend() {
         // Always present for three series, and it carries each band's weekly total so the
         // numbers are readable as text and not only as colour.
         var x: CGFloat = 52
         let y = bounds.height - 20
+        func entry(_ text: String, _ color: NSColor) {
+            color.setFill()
+            NSBezierPath(roundedRect: CGRect(x: x, y: y + 1, width: 9, height: 9), xRadius: 2, yRadius: 2).fill()
+            label(text, at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
+            x += 14 + text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width + 16
+        }
         for band in bands {
             let total = periods.reduce(0) { $0 + $1.value(band, unit) }
             guard total > 0 else { continue }
-            SeriesColor.of(band, dark: isDark).setFill()
-            NSBezierPath(roundedRect: CGRect(x: x, y: y + 1, width: 9, height: 9), xRadius: 2, yRadius: 2).fill()
-            let text = "\(band.rawValue) \(formatUsage(total, unit, withUnit: true, energyLabel: energyLabel))"
-            label(text, at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
-            x += 14 + text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width + 16
+            entry("\(band.rawValue) \(formatUsage(total, unit, withUnit: true, energyLabel: energyLabel))",
+                  SeriesColor.of(band, dark: isDark))
+        }
+        // The faded shade is a second encoding on top of the bands, so it gets its own key, in the
+        // first energy band drawn — for gas the only one. Not the standing charge, which comes
+        // first in the £ view: its grey faded to near the surface and the key all but vanished.
+        if periods.contains(where: \.provisional),
+            let band = bands.first(where: { band in
+                band.isConsumption && periods.contains { $0.value(band, unit) > 0 }
+            })
+        {
+            entry("Home Mini, not yet published", SeriesColor.of(band, dark: isDark).withAlphaComponent(provisionalAlpha))
         }
     }
 
@@ -240,6 +261,14 @@ final class UsageChartView: ChartView {
         var lines = [TooltipLine(heading)]
         if !period.hasData {
             lines.append(TooltipLine("No data yet — Octopus publishes about two days behind"))
+        }
+        if period.provisional {
+            // A day can be part published, part stand-in; a half hour is one or the other.
+            let halfHours = Int((period.end.timeIntervalSince(period.start) / 1800).rounded())
+            lines.append(TooltipLine(
+                period.homeMiniHalfHours >= halfHours
+                    ? "From the Home Mini — Octopus hasn't published this yet"
+                    : "\(period.homeMiniHalfHours) of \(halfHours) half hours from the Home Mini, not yet published"))
         }
         for band in bands where period.value(band, unit) > 0 {
             var text = "\(band.rawValue): \(formatUsage(period.value(band, unit), unit, withUnit: true, energyLabel: energyLabel))"
@@ -287,6 +316,50 @@ func renderUsageChart(
     view.placeholder = placeholder
     view.previewHover(hover)
     writePNG(renderOffscreen(view, dark: dark), to: path)
+}
+
+/// A seeded gas week whose unpublished tail is filled from a Home Mini, through the same
+/// `homeMiniFill` the app uses — the heating on mornings and evenings, one rate, and the last day
+/// and a half standing in for what Octopus hasn't published yet.
+func sampleGasWeek(tz: TimeZone, now: Date) -> UsageSeries {
+    let cal = calendar(tz)
+    guard let weekStart = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: now)) else {
+        return UsageSeries()
+    }
+    var generator = SeededGenerator(seed: 20_261_018)
+    let price = 8.1676
+    var buckets: [UsageBucket] = []
+    var standing: [(start: Date, pence: Double)] = []
+    var telemetry: [[String: Any]] = []
+    for slot in 0..<(7 * 48) {
+        let start = weekStart.addingTimeInterval(Double(slot) * 1800)
+        let hour = Double(cal.component(.hour, from: start)) + Double(cal.component(.minute, from: start)) / 60
+        let heating = (6.5..<8.5).contains(hour) || (17..<22).contains(hour)
+        let kwh = heating ? 2.2 + Double(generator.next() % 120) / 100 : (generator.next() % 6 == 0 ? 0.4 : 0)
+        // Published to 01:00 on the sixth day, as Octopus runs about two days behind.
+        if slot < 5 * 48 + 2 {
+            standing.append((start, 1.03))
+            if kwh > 0 {
+                buckets.append(UsageBucket(
+                    start: start, label: "CONSUMPTION_CHARGE", kwh: kwh, pence: kwh * price, pricePerUnit: price))
+            }
+        } else if start.addingTimeInterval(1800) <= now {
+            telemetry.append([
+                "readAt": iso8601(start), "consumptionDelta": String(format: "%.2f", kwh * 1000),
+                "costDeltaWithTax": String(format: "%.4f", kwh * price),
+            ])
+        }
+    }
+    var series = UsageSeries(
+        buckets: buckets, standing: standing, tz: tz, from: weekStart,
+        to: weekStart.addingTimeInterval(7 * 86400), readings: standing.count)
+    let fill = homeMiniFill(
+        rows: telemetry, missing: Set(unpublishedHalfHours(series, now: now)), standingPerHalfHour: 1.03,
+        fallbackPrice: price)
+    series.buckets += fill.buckets
+    series.standing += fill.standing
+    series.homeMiniSlots = fill.slots
+    return series
 }
 
 /// Deterministic, so the demo images and the hairline check are repeatable run to run.

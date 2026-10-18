@@ -257,6 +257,12 @@
     6 hours: 72 slots from 14:10, readings ["0: 276 W", "71: 468 W"], latest 468 W, peak 468 W at 20:05, 62 Wh
     refresh due: hour after 59 s false, 60 s true; 6 hours after 299 s false, 300 s true
     nothing back: empty true, null true
+  gas from the Home Mini:
+    device: gas G1, electricity beside an export meter E1, two gas meters none, no Mini none
+    unpublished and ended: 6 half hours, 20:00–23:00
+    stand-ins: 3 half hours, buckets ["4.275 kWh £0.3492", "1.500 kWh £0.1225"], standing 3
+    the day: 7.78 kWh, 3 half hours from the Mini, provisional true, complete false
+    half hours: 3 provisional, 5 still unpublished, zero-use stand-in has data true
   status icon:
     cheap, low carbon         : leaf.fill
     cheap, high carbon        : smoke.fill

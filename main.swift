@@ -57,6 +57,20 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
             periods: series.periods(.halfHour), tz: tz, dark: false, size: CGSize(width: 604, height: 300))
         print("half-hour hairline pixels: \(hairlines)")
 
+        // Gas with its unpublished tail filled from a Home Mini, drawn faded.
+        let gas = sampleGasWeek(tz: tz, now: ISO8601DateFormatter().date(from: "2026-09-25T15:00:00Z")!)
+        for (name, unit, scale, dark, hover) in [
+            ("day", UsageUnit.kwh, Granularity.day, false, Int?.none),
+            ("money-dark", .money, .day, true, nil),
+            ("halfhour", .kwh, .halfHour, false, nil),
+            ("tooltip-day", .kwh, .day, false, 5),
+            ("tooltip-halfhour", .kwh, .halfHour, false, 6 * 48 + 16),
+        ] {
+            renderUsageChart(
+                periods: gas.periods(scale), unit: unit, granularity: scale, tz: tz, dark: dark,
+                size: CGSize(width: 604, height: 300), hover: hover, to: "\(dir)/gas-\(name).png")
+        }
+
         // The carbon chart is drawn by hand too, so it gets the same treatment. `now` is fixed
         // rather than read from the clock, or the rule moves between runs and the images differ.
         let start = ISO8601DateFormatter().date(from: "2026-09-22T17:00:00Z")!
