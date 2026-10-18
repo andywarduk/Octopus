@@ -1,8 +1,9 @@
 # Octopus
 
 A macOS menu bar app for Octopus Energy, built around Intelligent Octopus Go. It shows whether you
-are on the cheap or standard rate right now, when that next changes, your car's charge level, and
-charts of your electricity and gas use.
+are on the cheap or standard rate right now, when that next changes, how clean the grid is, your
+car's charge level, and charts of your electricity and gas use — and, with an Octopus Home Mini,
+the power you are using right now.
 
 There are also four command-line scripts covering the same ground, for the terminal or for cron.
 
@@ -21,6 +22,10 @@ There are also four command-line scripts covering the same ground, for the termi
 </p>
 <p>
   <img src="images/carbon-intensity.png" alt="Carbon Intensity window with a tooltip showing the generation mix for a half hour" width="600">
+</p>
+<p>
+  <img src="images/live-power.png" alt="Live Power window showing the last hour of ten-second readings, with a kettle's spike and the newest reading labelled at the end of the line" width="420">
+  <img src="images/usage-home-mini.png" alt="Electricity Use window whose last two days, not yet published by Octopus, are filled from the Home Mini and drawn faded" width="420">
 </p>
 
 These are rendered by the app's own `--chartdemo` flag against fixed sample data (see
@@ -58,27 +63,26 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   under), smoke when it isn't — filled and green on the cheap rate, outlined on the standard rate.
   Until the carbon forecast has loaded it shows a bolt, filled green or outlined the same way, and
   a warning triangle if there is no data or an error. Hover it for the current price and intensity.
-- **Menu:** the current rate and when it next changes, the carbon intensity now and when it is
-  next green (100 gCO₂/kWh or under), the power you are using right now if you have an Octopus
-  Home Mini, the charge Octopus has planned for tonight,
-  each car's charge level in both percent and kWh, charging status and today's charging goal, your account balance, any
-  fixed tariff about to end, and the cheap windows in the next 48 hours including smart-charge
-  dispatches.
+- **Menu:** the current rate and when it next changes, the cheap windows in the next 48 hours
+  including smart-charge dispatches, the carbon intensity now and when it is next green
+  (100 gCO₂/kWh or under), the power you are using right now if you have an Octopus Home Mini, the
+  charge Octopus has planned for tonight, each car's charge level in both percent and kWh,
+  charging status and today's charging goal, your account balance, and every tariff on the
+  account with its end date.
 - **Alerts:** a notification 10 minutes before the rate changes — either way, cheap starting or
-  cheap ending — another when the smart-charge plan changes — a slot added, dropped, moved by more than five minutes, or cancelled
-  altogether — and one as a fixed tariff nears its end, at 30 days, 14, 7 and the day before.
-  Octopus nudges dispatches by a minute or two constantly, and those are ignored. All three can be
-  turned off in Settings.
-- **Usage:** click a tariff in the Tariffs section to open that meter's week of use as stacked
-  columns, one window per meter. Octopus publishes about two days behind; with a Home Mini, that
-  gap is filled from the Mini's own readings, drawn faded until Octopus publishes the real figures.
-  Gas costs come from the Mini; electricity's are worked out from your latest published rates,
-  and Agile, whose price changes every half hour, is left as a gap.
-- **Carbon intensity:** click the current figure in the menu's carbon intensity section to open
-  how clean the grid is where you live, half hour by half hour.
-- **Live power:** with an Octopus Home Mini, click the live power figure (⌘L) to chart the power
-  you've used over the last hour from ten-second readings, or over 6 or 24 hours as five-minute
-  averages. It keeps updating while the window is open.
+  cheap ending — another when the smart-charge plan changes — a slot added, dropped, moved by more
+  than five minutes, or cancelled altogether — and one as a fixed tariff nears its end, at 30
+  days, 14, 7 and the day before. Octopus nudges dispatches by a minute or two constantly, and
+  those are ignored. All three can be turned off in Settings.
+
+The windows open from the figures they chart:
+
+- **Usage:** click a tariff in the Tariffs section (⌘1, ⌘2…) to open that meter's week of use as
+  stacked columns, one window per meter.
+- **Carbon intensity:** click the current figure in the carbon intensity section (⌘C) to open how
+  clean the grid is where you live, half hour by half hour.
+- **Live power:** with a Home Mini, click the live power figure (⌘L) to chart the power you have
+  used over the last hour, or the last 6 or 24 hours. See [With a Home Mini](#with-a-home-mini).
 
 ### Starting at login
 
@@ -92,23 +96,25 @@ bundle to launch and the checkbox reports that it cannot find one.
 
 ### The usage windows
 
-Each fuel gets its own window, with its own week position and meter. Both offer:
+Each meter gets its own window, with its own week position. Each offers:
 
 - **kWh or pounds**, and a column **per day or per half hour**.
 - **Week navigation.** Back and forward a week at a time; forward stops at the current week.
   Weeks you have already looked at are remembered, so going back is instant.
 - **Hover** a column for its breakdown, each band's price, and the exact period.
 
-Columns stack by **price** — off-peak and standard — based on what each half hour was actually
-billed, not on an assumed schedule. A smart charge is marked under the axis rather than split out
-of the bar, because the tariff's per-device buckets are a billing allocation rather than a
-measurement of what the car drew.
+Columns stack by **price**, based on what each half hour was actually billed rather than on an
+assumed schedule: standard at the bottom, off-peak above it, and on top **smart charge** — time
+that was cheap only because Octopus ran a smart charge outside the off-peak hours. Smart-charge
+time is split out by when it happened, not by the tariff's per-device buckets, which are a billing
+allocation rather than a measurement of what the car drew; so it covers everything used in those
+half hours, house and car alike.
 
-Gas is single-rate, so its columns are one band with no smart-charge marker.
+Gas is single-rate, so its columns are one band.
 
 Days Octopus has not published yet show a grey dash rather than an empty bar — the two mean
 different things. Octopus runs roughly two days behind, so the last day or two of the current week
-is normally blank.
+is normally blank. With a Home Mini they are filled in, provisionally — see below.
 
 In pounds, the standing charge stacks underneath as a grey band, so a column totals what the period
 actually cost. It is left out of the kWh view, where it would be energy that was never delivered.
@@ -186,12 +192,42 @@ history, so the arrows are disabled on Octopus.
 The region comes from the postcode of whichever electricity meter is selected in Settings, and
 only the outward part of it is sent.
 
+### With a Home Mini
+
+An Octopus Home Mini pairs with your smart meters and passes their readings to Octopus as they
+happen: electricity every ten seconds, gas about every half hour. The app finds it on its own —
+there is nothing to set up — and uses it in three places:
+
+- **Live power in the menu.** "Using 443 W", with the time of the reading. Opening the menu asks
+  for a fresh one, and the figure updates in place a second later.
+- **The Live Power window.** The last hour from ten-second readings, refreshed every minute; or the
+  last 6 or 24 hours as five-minute averages, refreshed every five. Hover for any reading. The
+  footer gives the energy used over the period and the peak.
+- **Filling the usage gap.** The days Octopus hasn't published yet are filled from the Mini's own
+  half-hourly readings, drawn faded with a "Not yet published" key, and replaced as Octopus
+  catches up. Gas costs come from the Mini itself. The Mini reports no cost for electricity, so
+  those half hours are priced at your latest published rates — off-peak or standard by the
+  time of day, and cheap during a smart charge Octopus still has a record of, which is about a day.
+
+What it can't do:
+
+- **There is no live gas figure.** Gas meters run on batteries and wake about every half hour, so
+  gas only ever arrives half-hourly, with no reading of power.
+- **History starts when the Mini was paired.** Nothing earlier is filled in.
+- **Agile electricity isn't filled**, since its price changes every half hour; nor is a gas meter
+  that reports cubic metres rather than kWh, or a property with more than one meter of a fuel,
+  where there's no telling which reading belongs to which.
+
+The Live Power window costs one request a minute while it is open on the last hour, so close it
+when you are done with it.
+
 ### Multiple properties and meters
 
 Meters are matched to the property they actually sit at, and only those with an active agreement
-are offered. Every meter's tariff opens its own usage window, titled with the address. If you have more than one electricity meter, **Settings** chooses which one
-drives the menu bar rate, the rate-change alerts and the carbon intensity postcode. Smart-charge
-and tariff-end alerts cover the whole account whichever you pick.
+are offered. Every meter's tariff opens its own usage window, titled with the address, and each
+Home Mini gets its own live power line and window. If you have more than one electricity meter,
+**Settings** chooses which one drives the menu bar rate, the rate-change alerts and the carbon
+intensity postcode. Smart-charge and tariff-end alerts cover the whole account whichever you pick.
 
 ### Command-line scripts
 

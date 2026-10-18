@@ -428,10 +428,13 @@ against real data. Treat those paths as unverified.
 
 ## Design decisions worth keeping
 
-- **Bands are prices, not devices.** The stack encodes off-peak versus standard, which is real. A
-  smart charge is a marker under the axis. See the allocation note above for why.
+- **Bands are prices, not devices.** The stack encodes off-peak, standard and smart charge, which
+  are real. The smart-charge band is cheap time outside the off-peak timetable, split out by when
+  it happened rather than by the per-device buckets — so it is everything used in those half hours,
+  house and car alike, never "what the car drew". See the allocation note above for why. It
+  replaced a marker under the axis.
 - **Standard sits at the bottom** of the consumption bands, anchored to the baseline, so it can be
-  compared day to day. Off-peak floats on top.
+  compared day to day. Off-peak floats above it, and smart charge on top.
 - **The standing charge stacks below both, in money mode only**, so a column totals what the day
   actually cost. It is neutral grey, not a categorical hue: it is not a rate, and no hue in the
   palette separates from blue in dark mode at the bottom of a stack — violet, the closest, is
@@ -529,7 +532,7 @@ against real data. Treat those paths as unverified.
 - **The mix stack is normalised to each column's own total.** The shares are rounded at source and
   can add to 100.1, which draws a sliver above a fixed 100% axis and reads as a bug.
 - **The chart palette is validated**, not chosen by eye. Off-peak green `#1baf7a` / `#199e70`,
-  standard blue `#2a78d6` / `#3987e5` (light/dark), smart-charge marker orange `#eb6834` /
+  standard blue `#2a78d6` / `#3987e5` (light/dark), smart-charge orange `#eb6834` /
   `#d95926`. These pass colourblind and contrast checks in both modes. Green is below 3:1 on the
   light surface, which is why the legend carries totals and columns are labelled — do not remove
   those without re-checking the palette.
