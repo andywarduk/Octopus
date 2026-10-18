@@ -245,7 +245,7 @@ func parseTariffEnds(_ account: [String: Any], accountNumber: String = "", now: 
 
 /// The objects in a JSON list, skipping nulls: a list whose items are nullable can hold some, and
 /// casting it straight to `[[String: Any]]` would then drop the whole list.
-private func objects(_ any: Any?) -> [[String: Any]] {
+func objects(_ any: Any?) -> [[String: Any]] {
     ((any as? [Any]) ?? []).compactMap { $0 as? [String: Any] }
 }
 

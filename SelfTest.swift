@@ -1033,7 +1033,7 @@ func selfTest() {
             // The same half hour twice: counted once.
             ["readAt": slotTime(42), "consumptionDelta": "1500.00"],
         ] as [Any],
-        missing: Set(missingSlots), standingPerHalfHour: 1.03, fallbackPrice: 8.17)
+        missing: Set(missingSlots), standingPerHalfHour: 1.03, price: { _ in 8.17 })
     print("    stand-ins: \(gasFill.slots.count) half hours, buckets "
         + "\(gasFill.buckets.map { String(format: "%.3f kWh £%.4f", $0.kwh, $0.pence / 100) }), "
         + "standing \(gasFill.standing.count)")
@@ -1048,6 +1048,56 @@ func selfTest() {
     print("    half hours: \(gasHalfHours.filter(\.provisional).count) provisional, "
         + "\(gasHalfHours.filter { !$0.hasData }.count) still unpublished, "
         + "zero-use stand-in has data \(gasHalfHours[41].hasData)")
+
+    // Electricity stand-ins carry no cost, so they are priced, and so banded, by when they fell.
+    print("  electricity from the Home Mini:")
+    let elecDay = date("2026-09-24T23:00:00Z")
+    func elecSlot(_ index: Int) -> Date { elecDay.addingTimeInterval(Double(index) * 1800) }
+    var elecSeries = UsageSeries(
+        buckets: [
+            UsageBucket(start: elecSlot(4), label: "CONSUMPTION_CHARGE_ECO7_NIGHT_H", kwh: 1, pence: 6.9, pricePerUnit: 6.9),
+            UsageBucket(start: elecSlot(20), label: "CONSUMPTION_CHARGE_ECO7_DAY_H", kwh: 1, pence: 30.37, pricePerUnit: 30.37),
+        ],
+        standing: (0..<24).map { (elecSlot($0), 1.14) },
+        tz: tzLondon, from: elecDay, to: elecDay.addingTimeInterval(86400), readings: 24,
+        offPeakWindows: fallbackWindows)
+    let elecDispatch = [(start: elecSlot(26), end: elecSlot(28))]
+    if let pricing = standInPricing(elecSeries, fuel: .electricity, dispatches: elecDispatch) {
+        let priced = [("02:00 off-peak", 4), ("13:00 smart charge", 26), ("16:00 neither", 32), ("23:30 off-peak", 47)]
+            .map { "\($0.0) \(pricing(elecSlot($0.1)).map { String(format: "%.2fp", $0) } ?? "none")" }
+        print("    priced: \(priced.joined(separator: ", "))")
+    }
+    let elecMissing = unpublishedHalfHours(elecSeries, now: elecSlot(40))
+    let elecFill = homeMiniFill(
+        rows: [
+            ["readAt": iso8601(elecSlot(26)), "consumptionDelta": "3500.0000", "costDeltaWithTax": NSNull()],
+            ["readAt": iso8601(elecSlot(32)), "consumptionDelta": "400.0000", "costDeltaWithTax": NSNull()],
+        ] as [Any],
+        missing: Set(elecMissing), standingPerHalfHour: 1.14,
+        price: standInPricing(elecSeries, fuel: .electricity, dispatches: elecDispatch) ?? { _ in nil })
+    elecSeries.buckets += elecFill.buckets
+    elecSeries.standing += elecFill.standing
+    elecSeries.homeMiniSlots = elecFill.slots
+    let elecHalfHours = elecSeries.periods(.halfHour)
+    let banded = [26, 32].map { index -> String in
+        let period = elecHalfHours[index]
+        let bands = RateBand.allCases.filter { $0.isConsumption && period.value($0, .kwh) > 0 }
+            .map { "\($0.rawValue) \(String(format: "%.1f kWh £%.2f", period.value($0, .kwh), period.value($0, .money) / 100))" }
+        return "\(formatted(period.start, "HH:mm", tzLondon)) \(bands.joined(separator: ", "))"
+    }
+    print("    banded: \(banded.joined(separator: "; "))")
+    // Agile: two prices and no timetable, so there is no telling which applied when.
+    let agileWeek = UsageSeries(
+        buckets: [
+            UsageBucket(start: elecSlot(4), label: "CONSUMPTION_CHARGE", kwh: 1, pence: 12, pricePerUnit: 12),
+            UsageBucket(start: elecSlot(20), label: "CONSUMPTION_CHARGE", kwh: 1, pence: 25, pricePerUnit: 25),
+        ], tz: tzLondon, readings: 2)
+    let flatWeek = UsageSeries(
+        buckets: [UsageBucket(start: elecSlot(4), label: "CONSUMPTION_CHARGE", kwh: 1, pence: 24.5, pricePerUnit: 24.5)],
+        tz: tzLondon, readings: 1)
+    print("    Agile filled: \(standInPricing(agileWeek, fuel: .electricity) != nil), "
+        + "single rate: \(standInPricing(flatWeek, fuel: .electricity)?(elecSlot(4)).map { String(format: "%.2fp", $0) } ?? "none") "
+        + "day and night, gas: \(standInPricing(gasSeries, fuel: .gas)?(elecSlot(4)).map { String(format: "%.2fp", $0) } ?? "none")")
 
     // The alert fires in both directions now, so the rule has to name the right one. A merged
     // window must not produce a change in its middle, where nothing actually changes.

@@ -262,6 +262,8 @@ final class UsageWindowController: NSObject {
         let provisional = periods.filter(\.provisional).count
         if provisional > 0 {
             text += " · \(provisional) \(noun)\(provisional == 1 ? "" : "s") from the Home Mini until Octopus publishes"
+            // The Mini states no cost for electricity, so its figure is worked out, not reported.
+            if fuel == .electricity { text += ", priced at the latest published rates" }
         }
         let pending = periods.filter { !$0.hasData }.count
         if pending > 0 {

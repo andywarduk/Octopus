@@ -70,8 +70,10 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   Octopus nudges dispatches by a minute or two constantly, and those are ignored. All three can be
   turned off in Settings.
 - **Usage:** click a tariff in the Tariffs section to open that meter's week of use as stacked
-  columns, one window per meter. Octopus publishes about two days behind; with a Home Mini, gas
-  fills that gap from the Mini's own readings, drawn faded until Octopus publishes the real figures.
+  columns, one window per meter. Octopus publishes about two days behind; with a Home Mini, that
+  gap is filled from the Mini's own readings, drawn faded until Octopus publishes the real figures.
+  Gas costs come from the Mini; electricity's are worked out from your latest published rates,
+  and Agile, whose price changes every half hour, is left as a gap.
 - **Carbon intensity:** click the current figure in the menu's carbon intensity section to open
   how clean the grid is where you live, half hour by half hour.
 - **Live power:** with an Octopus Home Mini, click the live power figure (⌘L) to chart the power

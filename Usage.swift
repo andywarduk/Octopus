@@ -239,13 +239,13 @@ let homeMiniBucketLabel = "HOME_MINI"
 /// The Home Mini's half-hourly rows as stand-ins for the half hours in `missing`, and only those:
 /// anything Octopus has published wins. Pure, so `--selftest` can cover it.
 ///
-/// Energy arrives in Wh and is converted to kWh. Cost arrives in pence including VAT, the same
-/// basis as the published figures; a row without one is priced at `fallbackPrice`, the last unit
-/// price Octopus published. Telemetry carries no standing charge, so each half hour is given
-/// `standingPerHalfHour`, the last one published — which also keeps a half hour that used nothing
-/// counting as data rather than as unpublished, since zero usage is data.
+/// Energy arrives in Wh and is converted to kWh. Gas cost arrives in pence including VAT, the same
+/// basis as the published figures; electricity's never arrives, and a row without one is priced
+/// per kWh by `price` — see `standInPricing`. Telemetry carries no standing charge, so each half
+/// hour is given `standingPerHalfHour`, the last one published — which also keeps a half hour that
+/// used nothing counting as data rather than as unpublished, since zero usage is data.
 func homeMiniFill(
-    rows: Any?, missing: Set<Date>, standingPerHalfHour: Double, fallbackPrice: Double?
+    rows: Any?, missing: Set<Date>, standingPerHalfHour: Double, price: (Date) -> Double?
 ) -> (buckets: [UsageBucket], standing: [(start: Date, pence: Double)], slots: Set<Date>) {
     var buckets: [UsageBucket] = []
     var standing: [(start: Date, pence: Double)] = []
@@ -258,45 +258,91 @@ func homeMiniFill(
         standing.append((start, standingPerHalfHour))
         let kwh = wh / 1000
         guard kwh > 0 else { continue }
-        guard let pence = toDouble(row["costDeltaWithTax"]) ?? fallbackPrice.map({ $0 * kwh }) else { continue }
+        guard let pence = toDouble(row["costDeltaWithTax"]) ?? price(start).map({ $0 * kwh }) else { continue }
         buckets.append(
             UsageBucket(start: start, label: homeMiniBucketLabel, kwh: kwh, pence: pence, pricePerUnit: pence / kwh))
     }
     return (buckets, standing, slots)
 }
 
-/// Fills a gas week's unpublished tail from its Home Mini, in one request. Returns the series
+/// How a stand-in half hour is priced per kWh when the Mini states no cost, from the rates Octopus
+/// most recently published in the same week. Nil when that can't be done honestly.
+///
+/// Gas has one rate. Electricity has two on a timetabled tariff — cheap inside the off-peak
+/// timetable and in any smart charge, standard otherwise — so a stand-in is priced, and so banded,
+/// by when it fell, exactly as `aggregateUsage` bands published half hours. A single-rate tariff
+/// has one price. Agile has no timetable and a different price every half hour, which the week's
+/// published buckets can't supply, so it is not filled at all.
+///
+/// - Parameter dispatches: smart charges known for the unpublished half hours. Octopus keeps
+///   completed dispatches for only about a day, so a daytime charge older than that is priced at
+///   the standard rate until Octopus publishes the half hour.
+func standInPricing(
+    _ series: UsageSeries, fuel: Fuel, dispatches: [(start: Date, end: Date)] = []
+) -> ((Date) -> Double?)? {
+    let latestFirst = series.buckets.sorted { $0.start > $1.start }
+    guard fuel == .electricity else {
+        let price = latestFirst.first?.pricePerUnit
+        return { _ in price }
+    }
+    let threshold = priceThreshold(series.buckets)
+    let standard = latestFirst.first { band(for: $0, threshold: threshold) == .standard }?.pricePerUnit
+    guard let threshold else { return { _ in standard } }
+    // The same test aggregateUsage uses for whether cheap time outside the timetable means anything.
+    let timetabled = !series.offPeakWindows.isEmpty || series.buckets.contains { isSmartChargeBucket($0.label) }
+    guard timetabled, let standard,
+        let cheap = latestFirst.first(where: { $0.pricePerUnit < threshold })?.pricePerUnit
+    else { return nil }
+    let windows = series.offPeakWindows.isEmpty ? fallbackWindows : series.offPeakWindows
+    let cal = calendar(series.tz)
+    return { slot in
+        let end = slot.addingTimeInterval(1800)
+        let dispatched = dispatches.contains { $0.start < end && $0.end > slot }
+        return inWindows(slot, windows, cal: cal) || dispatched ? cheap : standard
+    }
+}
+
+/// Fills a week's unpublished tail from its Home Mini, in one request. Returns the series
 /// unchanged when there is nothing to fill or the fill can't be trusted to match — and on any
 /// failure: like demand on the carbon chart, this is a garnish, and a week of published data is
 /// not lost because the Mini's request failed.
 ///
-/// Gas only. Electricity telemetry carries no cost at all, so its stand-ins could show energy but
-/// not what it cost, and its bands need the tariff's rates. And only in kWh: telemetry is energy,
-/// and a meter publishing in cubic metres can't be joined to it without a calorific value.
+/// Only in kWh: telemetry is energy, and a gas meter publishing in cubic metres can't be joined to
+/// it without a calorific value. Electricity's request also asks for the account's completed
+/// dispatches, so a smart charge in the gap is priced and banded as one.
 func fillFromHomeMini(_ series: UsageSeries, meter: MeterChoice, token: String, now: Date = Date()) async
     -> UsageSeries
 {
-    guard meter.fuel == .gas, series.energyLabel == "kWh", let device = meter.homeMiniDevice else { return series }
+    guard series.energyLabel == "kWh", let device = meter.homeMiniDevice else { return series }
     let missing = unpublishedHalfHours(series, now: now)
     guard let first = missing.first, let last = missing.last else { return series }
+    let electricity = meter.fuel == .electricity
+    var variables: [String: Any] = ["d": device, "s": iso8601(first), "e": iso8601(last.addingTimeInterval(1800))]
+    if electricity { variables["a"] = meter.accountNumber }
+    let dispatchDef = electricity ? ",$a:String!" : ""
+    let dispatchField = electricity ? "\n  completedDispatches(accountNumber:$a){start end}" : ""
     guard
         let data = try? await gql(
             """
-            query($d:String!,$s:DateTime!,$e:DateTime!){
-              smartMeterTelemetry(deviceId:$d,start:$s,end:$e,grouping:HALF_HOURLY){readAt consumptionDelta costDeltaWithTax}
+            query($d:String!,$s:DateTime!,$e:DateTime!\(dispatchDef)){
+              smartMeterTelemetry(deviceId:$d,start:$s,end:$e,grouping:HALF_HOURLY){readAt consumptionDelta costDeltaWithTax}\(dispatchField)
             }
             """,
-            ["d": device, "s": iso8601(first), "e": iso8601(last.addingTimeInterval(1800))], token: token)
+            variables, token: token, tolerating: ["completedDispatches"])
     else { return series }
 
-    // The last published figures, to carry into the half hours that have none of their own.
+    let dispatches = objects(data["completedDispatches"]).compactMap { row -> (start: Date, end: Date)? in
+        guard let start = parseDate(row["start"]), let end = parseDate(row["end"]) else { return nil }
+        return (start, end)
+    }
+    guard let price = standInPricing(series, fuel: meter.fuel, dispatches: dispatches) else { return series }
+    // The last published standing charge, to carry into the half hours that have none of their own.
     let lastStanding = series.standing.max { $0.start < $1.start }?.pence ?? 0
-    let lastPrice = series.buckets.max { $0.start < $1.start }?.pricePerUnit
     let fill = homeMiniFill(
         rows: data["smartMeterTelemetry"], missing: Set(missing),
         // A daily meter publishes the day's whole standing charge on one reading.
         standingPerHalfHour: series.supportsHalfHour ? lastStanding : lastStanding / 48,
-        fallbackPrice: lastPrice)
+        price: price)
     var filled = series
     filled.buckets += fill.buckets
     filled.standing += fill.standing

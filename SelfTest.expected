@@ -263,6 +263,10 @@
     stand-ins: 3 half hours, buckets ["4.275 kWh £0.3492", "1.500 kWh £0.1225"], standing 3
     the day: 7.78 kWh, 3 half hours from the Mini, provisional true, complete false
     half hours: 3 provisional, 5 still unpublished, zero-use stand-in has data true
+  electricity from the Home Mini:
+    priced: 02:00 off-peak 6.90p, 13:00 smart charge 6.90p, 16:00 neither 30.37p, 23:30 off-peak 6.90p
+    banded: 13:00 Smart charge 3.5 kWh £0.24; 16:00 Standard 0.4 kWh £0.12
+    Agile filled: false, single rate: 24.50p day and night, gas: 8.17p
   status icon:
     cheap, low carbon         : leaf.fill
     cheap, high carbon        : smoke.fill

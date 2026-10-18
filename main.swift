@@ -57,6 +57,19 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
             periods: series.periods(.halfHour), tz: tz, dark: false, size: CGSize(width: 604, height: 300))
         print("half-hour hairline pixels: \(hairlines)")
 
+        // Electricity with its unpublished tail filled from a Home Mini, drawn faded.
+        let filled = sampleUsageWeekFilled(tz: tz, now: ISO8601DateFormatter().date(from: "2026-09-25T15:00:00Z")!)
+        for (name, unit, scale, dark, hover) in [
+            ("day", UsageUnit.kwh, Granularity.day, false, Int?.none),
+            ("money-dark", .money, .day, true, nil),
+            ("halfhour", .kwh, .halfHour, false, nil),
+            ("tooltip-halfhour", .kwh, .halfHour, false, 6 * 48 + 26),
+        ] {
+            renderUsageChart(
+                periods: filled.periods(scale), unit: unit, granularity: scale, tz: tz, dark: dark,
+                size: CGSize(width: 604, height: 300), hover: hover, to: "\(dir)/filled-\(name).png")
+        }
+
         // Gas with its unpublished tail filled from a Home Mini, drawn faded.
         let gas = sampleGasWeek(tz: tz, now: ISO8601DateFormatter().date(from: "2026-09-25T15:00:00Z")!)
         for (name, unit, scale, dark, hover) in [

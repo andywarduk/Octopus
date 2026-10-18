@@ -211,15 +211,21 @@ final class UsageChartView: ChartView {
     }
 
     /// How strongly a provisional column is drawn: light enough to read as not final, while the
-    /// band's hue still shows through against both surfaces.
-    private var provisionalAlpha: CGFloat { 0.45 }
+    /// band's hue still shows through. Its own step in dark mode, not the same fraction: fading
+    /// toward a dark surface darkens, and at 0.45 the columns sank to about 1.9:1 against it, where
+    /// 0.6 holds about 2.4:1 — near the light mode's faded steps against theirs.
+    private var provisionalAlpha: CGFloat { isDark ? 0.6 : 0.45 }
 
     private func drawLegend() {
         // Always present for three series, and it carries each band's weekly total so the
         // numbers are readable as text and not only as colour.
         var x: CGFloat = 52
         let y = bounds.height - 20
-        func entry(_ text: String, _ color: NSColor) {
+        func entry(_ text: String, _ color: NSColor, optional: Bool = false) {
+            let width = 14 + text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width
+            // A key that would run off the edge is left out rather than clipped, when what it
+            // says is also in the tooltip and the footer.
+            if optional, x + width > bounds.width - 8 { return }
             color.setFill()
             NSBezierPath(roundedRect: CGRect(x: x, y: y + 1, width: 9, height: 9), xRadius: 2, yRadius: 2).fill()
             label(text, at: CGPoint(x: x + 14, y: y - 1), size: 10, color: .secondaryLabelColor)
@@ -239,7 +245,9 @@ final class UsageChartView: ChartView {
                 band.isConsumption && periods.contains { $0.value(band, unit) > 0 }
             })
         {
-            entry("Home Mini, not yet published", SeriesColor.of(band, dark: isDark).withAlphaComponent(provisionalAlpha))
+            entry(
+                "Not yet published", SeriesColor.of(band, dark: isDark).withAlphaComponent(provisionalAlpha),
+                optional: true)
         }
     }
 
@@ -355,7 +363,35 @@ func sampleGasWeek(tz: TimeZone, now: Date) -> UsageSeries {
         to: weekStart.addingTimeInterval(7 * 86400), readings: standing.count)
     let fill = homeMiniFill(
         rows: telemetry, missing: Set(unpublishedHalfHours(series, now: now)), standingPerHalfHour: 1.03,
-        fallbackPrice: price)
+        price: { _ in price })
+    series.buckets += fill.buckets
+    series.standing += fill.standing
+    series.homeMiniSlots = fill.slots
+    return series
+}
+
+/// The sample electricity week with its unpublished tail filled from a Home Mini, priced and banded
+/// by `standInPricing` as the app does: base load, the car overnight, and a daytime smart charge
+/// on the last day that only the completed dispatches can make cheap.
+func sampleUsageWeekFilled(tz: TimeZone, now: Date) -> UsageSeries {
+    var series = sampleUsageWeek(tz: tz, now: now)
+    series.offPeakWindows = fallbackWindows
+    let cal = calendar(tz)
+    var generator = SeededGenerator(seed: 20_261_019)
+    let missing = unpublishedHalfHours(series, now: now)
+    guard let lastDay = missing.last.map({ cal.startOfDay(for: $0) }),
+        let dispatchStart = cal.date(bySettingHour: 13, minute: 0, second: 0, of: lastDay)
+    else { return series }
+    let dispatch = (start: dispatchStart, end: dispatchStart.addingTimeInterval(5400))
+    let rows: [[String: Any]] = missing.map { slot in
+        let hour = Double(cal.component(.hour, from: slot)) + Double(cal.component(.minute, from: slot)) / 60
+        var kwh = Double.random(in: 0.12...0.34, using: &generator)
+        if hour >= 23.5 || hour < 3 { kwh += 3.5 }
+        if slot >= dispatch.start && slot < dispatch.end { kwh += 3.5 }
+        return ["readAt": iso8601(slot), "consumptionDelta": String(format: "%.4f", kwh * 1000), "costDeltaWithTax": NSNull()]
+    }
+    guard let price = standInPricing(series, fuel: .electricity, dispatches: [dispatch]) else { return series }
+    let fill = homeMiniFill(rows: rows, missing: Set(missing), standingPerHalfHour: 1.03, price: price)
     series.buckets += fill.buckets
     series.standing += fill.standing
     series.homeMiniSlots = fill.slots
