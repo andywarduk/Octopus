@@ -35,8 +35,10 @@ chart, then look at the PNGs.** `--selftest` only prints; `selftest.sh` diffs th
 the committed `SelfTest.expected` and fails on any difference. When a change is intended, read the
 diff, then accept it with `./selftest.sh --update` and commit the new expected output alongside the
 code. The output is fixed-date and timezone-independent, so a diff always means something changed. The chart has repeatedly been broken in ways only visible in the
-rendered output. The sample week is seeded, so the images are identical run to run and a diff is
-meaningful.
+rendered output. The sample week is seeded and fixed to 19–25 September 2026 in London time, so
+the images are identical run to run, day to day and machine to machine, and a diff is meaningful.
+It used to be built from today's date in the Mac's own timezone, which moved every label at
+midnight — the "seeded" images differed from one day to the next with no code change at all.
 
 `--chartdemo` and `--iconset` create their output directory if it is missing; they used to write
 nothing into one that didn't exist, without saying so, which reads as every image having changed.

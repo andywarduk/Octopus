@@ -273,11 +273,14 @@ final class UsageChartView: ChartView {
 
 @MainActor
 func renderUsageChart(
-    periods: [UsagePeriod], unit: UsageUnit, granularity: Granularity, dark: Bool, size: CGSize,
-    hover: Int? = nil, placeholder: String? = nil, to path: String
+    periods: [UsagePeriod], unit: UsageUnit, granularity: Granularity, tz: TimeZone, dark: Bool,
+    size: CGSize, hover: Int? = nil, placeholder: String? = nil, to path: String
 ) {
     let view = UsageChartView(frame: CGRect(origin: .zero, size: size))
     view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+    // The periods' own zone, not the view's default of the Mac's, or the labels depend on where
+    // the render ran.
+    view.tz = tz
     view.periods = periods
     view.granularity = granularity
     view.unit = unit
@@ -357,9 +360,10 @@ func sampleUsageWeek(tz: TimeZone, now: Date = Date()) -> UsageSeries {
 /// Counts one-pixel background slivers flanked by bar colour — the hairlines that appear when
 /// adjacent bars don't quite meet. Used by --chartdemo to check the fix without a screenshot.
 @MainActor
-func countHairlines(periods: [UsagePeriod], dark: Bool, size: CGSize) -> Int {
+func countHairlines(periods: [UsagePeriod], tz: TimeZone, dark: Bool, size: CGSize) -> Int {
     let view = UsageChartView(frame: CGRect(origin: .zero, size: size))
     view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+    view.tz = tz
     view.granularity = .halfHour
     view.periods = periods
     guard let rep = renderOffscreen(view, dark: dark) else { return -1 }

@@ -29,7 +29,11 @@ if let i = CommandLine.arguments.firstIndex(of: "--iconset"), i + 1 < CommandLin
 if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandLine.arguments.count {
     let dir = outputDirectory(CommandLine.arguments[i + 1])
     MainActor.assumeIsolated {
-        let series = sampleUsageWeek(tz: .current)
+        // A fixed week in a fixed timezone, the one `--selftest` uses. Built from today's date and
+        // the Mac's own zone, the day labels moved every midnight and every image differed from
+        // the day before's — so a diff meant nothing, which is what the seeding was for.
+        let tz = londonTimeZone
+        let series = sampleUsageWeek(tz: tz, now: ISO8601DateFormatter().date(from: "2026-09-25T12:00:00Z")!)
         for (name, unit, scale, dark, hover) in [
             ("kwh-light", UsageUnit.kwh, Granularity.day, false, Int?.none),
             ("money-light", .money, .day, false, nil),
@@ -42,20 +46,19 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
             ("tooltip-money", .money, .day, true, 4),
         ] {
             renderUsageChart(
-                periods: series.periods(scale), unit: unit, granularity: scale, dark: dark,
+                periods: series.periods(scale), unit: unit, granularity: scale, tz: tz, dark: dark,
                 size: CGSize(width: 604, height: 300), hover: hover, to: "\(dir)/chart-\(name).png")
         }
         renderUsageChart(
-            periods: [], unit: .kwh, granularity: .day, dark: false,
+            periods: [], unit: .kwh, granularity: .day, tz: tz, dark: false,
             size: CGSize(width: 604, height: 300), placeholder: "No usage to show",
             to: "\(dir)/chart-empty.png")
         let hairlines = countHairlines(
-            periods: series.periods(.halfHour), dark: false, size: CGSize(width: 604, height: 300))
+            periods: series.periods(.halfHour), tz: tz, dark: false, size: CGSize(width: 604, height: 300))
         print("half-hour hairline pixels: \(hairlines)")
 
         // The carbon chart is drawn by hand too, so it gets the same treatment. `now` is fixed
         // rather than read from the clock, or the rule moves between runs and the images differ.
-        let tz = londonTimeZone
         let start = ISO8601DateFormatter().date(from: "2026-09-22T17:00:00Z")!
         let forecast = sampleCarbonForecast(from: start)
         for (name, dark, mode, hover) in [
