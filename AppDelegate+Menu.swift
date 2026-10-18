@@ -128,30 +128,32 @@ extension AppDelegate {
     /// Rewrites the live power lines of an open menu with the snapshot just fetched.
     ///
     /// The one exception to rebuilding only in `menuNeedsUpdate`, and not a rebuild: the items stay,
-    /// only their labels' text changes. Without it the figure is whatever the last refresh got, up
-    /// to five minutes old — and opening the menu is what asks for a fresh one, which lands a second
-    /// later with the menu still open. If the lines no longer match the items one for one, a Mini
-    /// paired or removed since the menu opened, it waits for the next opening.
+    /// only their text changes. Without it the figure is whatever the last refresh got, up to five
+    /// minutes old — and opening the menu is what asks for a fresh one, which lands a second later
+    /// with the menu still open. If the lines no longer match the items one for one, a Mini paired
+    /// or removed since the menu opened, it waits for the next opening.
     func updateLiveItems() {
         guard menuIsOpen, let s = snapshot else { return }
         let fresh = livePowerLines(s, now: Date()).compactMap { line -> (title: String, detail: String)? in
-            if case .live(let title, let detail) = line { return (title, detail) }
+            if case .live(let title, _, let detail) = line { return (title, detail) }
             return nil
         }
         guard fresh.count == liveItems.count else { return }
-        for (item, text) in zip(liveItems, fresh) {
-            // infoItem lays the title out first and the detail under it.
-            let labels = item.view?.subviews.compactMap { $0 as? NSTextField } ?? []
-            guard labels.count == 2 else { continue }
-            labels[0].stringValue = text.title
-            labels[1].stringValue = text.detail
-            for label in labels { label.sizeToFit() }
+        for (live, text) in zip(liveItems, fresh) {
+            live.item.title = text.title
+            if #available(macOS 14, *) {
+                live.item.subtitle = text.detail
+            } else if let label = live.detailRow?.view?.subviews.compactMap({ $0 as? NSTextField }).first {
+                label.stringValue = text.detail
+                label.sizeToFit()
+            }
         }
     }
 
     private func add(_ lines: [Line]) {
         // Usage items are numbered ⌘1, ⌘2… in the order their tariffs are listed, so every meter
-        // gets one, not just the first of each fuel; past nine they go without. Carbon keeps ⌘C.
+        // gets one, not just the first of each fuel; past nine they go without. Carbon keeps ⌘C,
+        // and the first live power line takes ⌘L.
         var usageNumber = 0
         for line in lines {
             switch line {
@@ -161,43 +163,52 @@ extension AppDelegate {
                 menu.addItem(infoItem(t, font: .boldSystemFont(ofSize: NSFont.systemFontSize), color: .labelColor))
             case .text(let t):
                 menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: .labelColor))
-            case .info(let title, let detail), .live(let title, let detail):
+            case .info(let title, let detail):
                 // An empty title is a detail standing alone, such as the price footnote with no
                 // line above it to belong to.
-                let item = infoItem(
+                menu.addItem(infoItem(
                     title.isEmpty ? nil : title, font: .menuFont(ofSize: 0), color: .labelColor,
-                    details: detail.components(separatedBy: "\n"))
-                menu.addItem(item)
-                if case .live = line { liveItems.append(item) }
+                    details: detail.components(separatedBy: "\n")))
             case .action(let title, let action, let detail):
-                let key: String
-                switch action {
-                case .carbon:
-                    key = "c"
-                case .usage:
+                var key = ""
+                if case .usage = action {
                     usageNumber += 1
-                    key = usageNumber <= 9 ? String(usageNumber) : ""
+                    if usageNumber <= 9 { key = String(usageNumber) }
                 }
-                let item = NSMenuItem(title: title, action: #selector(openMenuAction(_:)), keyEquivalent: key)
-                item.target = self
-                item.tag = menuActions.count
-                menuActions.append(action)
-                // A tariff line doesn't say it opens anything, so the tooltip does.
-                switch action {
-                case .usage(let meter): item.toolTip = "Show \(meter.fuel.rawValue) use"
-                case .carbon: item.toolTip = "Show carbon intensity"
-                }
-                if let detail, #available(macOS 14, *) {
-                    item.subtitle = detail
-                    menu.addItem(item)
-                } else {
-                    menu.addItem(item)
-                    if let detail {
-                        // No native subtitle before macOS 14: the same look, drawn as its own row.
-                        menu.addItem(infoItem(nil, font: .menuFont(ofSize: 0), color: .labelColor, details: [detail]))
-                    }
-                }
+                addAction(title, action, detail: detail, key: key)
+            case .live(let title, let action, let detail):
+                let added = addAction(title, action, detail: detail, key: liveItems.isEmpty ? "l" : "")
+                liveItems.append(added)
             }
         }
+    }
+
+    /// An item that opens a window, with its detail as the subtitle — or, before macOS 14, as a row
+    /// of its own drawn in the same style, which is returned so a live line can rewrite it.
+    @discardableResult
+    private func addAction(
+        _ title: String, _ action: MenuAction, detail: String?, key: String
+    ) -> (item: NSMenuItem, detailRow: NSMenuItem?) {
+        let item = NSMenuItem(
+            title: title, action: #selector(openMenuAction(_:)), keyEquivalent: action == .carbon ? "c" : key)
+        item.target = self
+        item.tag = menuActions.count
+        menuActions.append(action)
+        // A tariff line doesn't say it opens anything, so the tooltip does.
+        switch action {
+        case .usage(let meter): item.toolTip = "Show \(meter.fuel.rawValue) use"
+        case .carbon: item.toolTip = "Show carbon intensity"
+        case .livePower: item.toolTip = "Show live power"
+        }
+        menu.addItem(item)
+        guard let detail else { return (item, nil) }
+        if #available(macOS 14, *) {
+            item.subtitle = detail
+            return (item, nil)
+        }
+        // No native subtitle before macOS 14: the same look, drawn as its own row.
+        let row = infoItem(nil, font: .menuFont(ofSize: 0), color: .labelColor, details: [detail])
+        menu.addItem(row)
+        return (item, row)
     }
 }

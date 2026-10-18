@@ -252,6 +252,11 @@
     no Mini                         : (no section)
     failed fetch after a good one: ["443 W"], known true
     placement: Standard rate now · 30.37p/kWh → Upcoming cheap rate → Carbon intensity → Live power → Cars → Account → Tariffs
+  live power window:
+    hour: 360 slots from 19:13:10, readings ["0: 310 W", "357: 440 W", "359: 443 W"], latest 443 W, peak 443 W at 20:13:00, 4 Wh
+    6 hours: 72 slots from 14:10, readings ["0: 276 W", "71: 468 W"], latest 468 W, peak 468 W at 20:05, 62 Wh
+    refresh due: hour after 59 s false, 60 s true; 6 hours after 299 s false, 300 s true
+    nothing back: empty true, null true
   status icon:
     cheap, low carbon         : leaf.fill
     cheap, high carbon        : smoke.fill

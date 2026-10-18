@@ -49,7 +49,7 @@ struct LiveMeter: Equatable {
 
 /// The newest reading from one `LiveMeter`.
 struct LivePower {
-    var property: String
+    var meter: LiveMeter
     /// Demand in watts at `at`. Nil when nothing came back for the last few minutes.
     var watts: Double?
     var at: Date?
@@ -113,10 +113,10 @@ enum Line {
     /// A line with its details under it in the subtitle style — the non-clickable counterpart of an
     /// action's subtitle. `detail` may hold several lines, separated by newlines.
     case info(String, detail: String)
-    /// An `info` line whose figure changes by the second. Drawn the same, but a fetch that lands
+    /// An `action` line whose figure changes by the second. Drawn the same, but a fetch that lands
     /// while the menu is open rewrites it in place, since the menu itself can't be rebuilt then.
     /// Always exactly one line of detail, so rewriting it never changes the item's height.
-    case live(String, detail: String)
+    case live(String, MenuAction, detail: String)
     /// A clickable item that opens a window, placed beside the information it belongs to. `detail`
     /// is a secondary line under it — the item's subtitle where macOS supports one.
     case action(String, MenuAction, detail: String? = nil)
@@ -126,4 +126,5 @@ enum Line {
 enum MenuAction: Equatable {
     case usage(MeterChoice)
     case carbon
+    case livePower(LiveMeter)
 }

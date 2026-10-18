@@ -215,7 +215,8 @@ func carbonLines(_ readings: [CarbonReading], now: Date, tz: TimeZone) -> [Line]
 }
 
 /// What the Home Mini says is being drawn, one line per meter that has one, with when it was read.
-/// No section at all when no meter has a Mini.
+/// No section at all when no meter has a Mini. Like a tariff line, the figure itself opens the
+/// window charting it — whether or not there is a reading, since the window has history.
 ///
 /// Every line carries exactly one detail, reading or not, so the open menu can rewrite it in place
 /// without the item changing height.
@@ -228,16 +229,18 @@ func livePowerLines(_ s: Snapshot, now: Date) -> [Line] {
     var lines: [Line] = [.separator, .header("Live power")]
     for reading in s.livePower {
         // The address only earns its place when the account has more than one.
-        let at = s.propertyCount > 1 && !reading.property.isEmpty ? " at \(reading.property)" : ""
+        let place = reading.meter.property
+        let at = s.propertyCount > 1 && !place.isEmpty ? " at \(place)" : ""
+        let opens = MenuAction.livePower(reading.meter)
         guard let watts = reading.watts, let when = reading.at else {
             let title = s.devicesKnown ? "No reading in the last \(Int(liveLookback / 60)) minutes" : "Couldn't load live power"
-            lines.append(.live(title + at, detail: "Checked at \(clock(s.fetched))"))
+            lines.append(.live(title + at, opens, detail: "Checked at \(clock(s.fetched))"))
             continue
         }
         // Not seen yet: the account this was built on has no generation. Worded rather than
         // printed as a negative figure in case export does come through as negative demand.
         let verb = watts < 0 ? "Exporting" : "Using"
-        lines.append(.live("\(verb) \(powerText(watts))\(at)", detail: "As of \(clock(when))"))
+        lines.append(.live("\(verb) \(powerText(watts))\(at)", opens, detail: "As of \(clock(when))"))
     }
     return lines
 }

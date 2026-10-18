@@ -752,7 +752,8 @@ func selfTest() {
         switch line {
         case .header(let t): print("    [\(t)]")
         case .text(let t): print("    \(t)")
-        case .info(let t, let detail), .live(let t, let detail):
+        case .live(let t, _, let detail): print("    → \(t) | \(detail)")
+        case .info(let t, let detail):
             print("    \(t)")
             for line in detail.components(separatedBy: "\n") { print("        \(line)") }
         case .action(let t, _, let detail): print("    → \(t)" + (detail.map { " | \($0)" } ?? ""))
@@ -842,7 +843,8 @@ func selfTest() {
         case .separator: print("      ------")
         case .header(let t): print("      [\(t)]")
         case .text(let t): print("      \(t)")
-        case .info(let t, let detail), .live(let t, let detail):
+        case .live(let t, _, let detail): print("      → \(t) | \(detail)")
+        case .info(let t, let detail):
             print("      \(t)")
             for line in detail.components(separatedBy: "\n") { print("          \(line)") }
         case .action(let t, _, let detail): print("      → \(t)" + (detail.map { " | \($0)" } ?? ""))
@@ -897,7 +899,7 @@ func selfTest() {
                        LiveMeter(deviceId: "E2", property: "9 Other Road"),
                        LiveMeter(deviceId: "E3", property: "3 Third Street")]
     for reading in parseLivePower(telemetryReply, meters: threeMeters) {
-        print("    reply, \(reading.property): "
+        print("    reply, \(reading.meter.property): "
             + (reading.watts.map { "\(powerText($0)) at \(formatted(reading.at!, "HH:mm:ss", tzLondon))" } ?? "no reading"))
     }
     print("    failed request: \(parseLivePower(nil, meters: threeMeters).map { $0.watts == nil ? "no reading" : "?" })")
@@ -910,6 +912,8 @@ func selfTest() {
     print("    errors still failing the request: "
         + "\(untoleratedErrors(liveErrors, tolerating: ["t0", "smartDeviceNetworks"]).compactMap { $0["message"] as? String })")
     let liveNow = date("2026-09-19T15:13:20Z")
+    let testLane = LiveMeter(deviceId: "E1", property: "1 Test Lane")
+    let otherRoad = LiveMeter(deviceId: "E2", property: "9 Other Road")
     let readAt = date("2026-09-19T15:13:10Z")
     func withLive(_ readings: [LivePower], houses: Int = 1, known: Bool = true) -> Snapshot {
         var copy = snap
@@ -919,34 +923,71 @@ func selfTest() {
         return copy
     }
     for (label, s) in [
-        ("443 W", withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt)])),
-        ("999.6 W", withLive([LivePower(property: "1 Test Lane", watts: 999.6, at: readAt)])),
-        ("7432 W", withLive([LivePower(property: "1 Test Lane", watts: 7432, at: readAt)])),
-        ("negative", withLive([LivePower(property: "1 Test Lane", watts: -1250, at: readAt)])),
-        ("yesterday's reading", withLive([LivePower(property: "1 Test Lane", watts: 300, at: date("2026-09-18T20:00:00Z"))])),
+        ("443 W", withLive([LivePower(meter: testLane, watts: 443, at: readAt)])),
+        ("999.6 W", withLive([LivePower(meter: testLane, watts: 999.6, at: readAt)])),
+        ("7432 W", withLive([LivePower(meter: testLane, watts: 7432, at: readAt)])),
+        ("negative", withLive([LivePower(meter: testLane, watts: -1250, at: readAt)])),
+        ("yesterday's reading", withLive([LivePower(meter: testLane, watts: 300, at: date("2026-09-18T20:00:00Z"))])),
         ("two houses, one silent",
-         withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt), LivePower(property: "9 Other Road")], houses: 2)),
-        ("devices failed, nothing carried", withLive([LivePower(property: "1 Test Lane")], known: false)),
+         withLive([LivePower(meter: testLane, watts: 443, at: readAt), LivePower(meter: otherRoad)], houses: 2)),
+        ("devices failed, nothing carried", withLive([LivePower(meter: testLane)], known: false)),
         ("no Mini", withLive([])),
     ] {
         let texts = livePowerLines(s, now: liveNow).compactMap { line -> String? in
-            if case .live(let title, let detail) = line { return "\(title) | \(detail)" }
+            if case .live(let title, _, let detail) = line { return "\(title) | \(detail)" }
             return nil
         }
         print("    \(label.padding(toLength: 32, withPad: " ", startingAt: 0)): "
             + (texts.isEmpty ? "(no section)" : texts.joined(separator: " / ")))
     }
     let liveFailed = carryForwardDevices(
-        withLive([LivePower(property: "1 Test Lane")], known: false),
-        from: withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt)]), now: liveNow)
+        withLive([LivePower(meter: testLane)], known: false),
+        from: withLive([LivePower(meter: testLane, watts: 443, at: readAt)]), now: liveNow)
     print("    failed fetch after a good one: \(liveFailed.livePower.map { $0.watts.map(powerText) ?? "no reading" }), "
         + "known \(liveFailed.devicesKnown)")
-    let headers = menuLines(withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt)]), now: liveNow)
+    let headers = menuLines(withLive([LivePower(meter: testLane, watts: 443, at: readAt)]), now: liveNow)
         .compactMap { line -> String? in
             if case .header(let title) = line { return title }
             return nil
         }
     print("    placement: \(headers.joined(separator: " → "))")
+
+    // The window's series: readings laid into fixed slots, so a missing one is a gap in place, and
+    // the five-minute bucket still filling left out rather than averaged over minutes it hasn't had.
+    print("  live power window:")
+    let windowNow = date("2026-10-12T19:13:05Z")
+    let hourSeries = liveSeries(
+        rows: [
+            ["readAt": "2026-10-12T18:12:50+00:00", "demand": "300.0", "consumptionDelta": "1.0000"],
+            ["readAt": "2026-10-12T18:13:10+00:00", "demand": "310.0", "consumptionDelta": "1.0000"],
+            ["readAt": "2026-10-12T19:12:40+00:00", "demand": "4.4E+2", "consumptionDelta": "1.0000"],
+            // The slot holding now: a demand reading is whole the moment it is taken, so it stays.
+            ["readAt": "2026-10-12T19:13:00+00:00", "demand": "443.0", "consumptionDelta": "2.0000"],
+        ] as [Any], range: .hour, now: windowNow)
+    let sixHourSeries = liveSeries(
+        rows: [
+            ["readAt": "2026-10-12T13:05:00+00:00", "demand": "250.0", "consumptionDelta": "20.0000"],
+            ["readAt": "2026-10-12T13:10:00+00:00", "demand": "260.0", "consumptionDelta": "23.0000"],
+            // demand is one sample at the bucket's last reading; the plotted figure is the energy's average.
+            ["readAt": "2026-10-12T19:05:00+00:00", "demand": "451.0", "consumptionDelta": "39.0000"],
+            // Still filling at 19:13:05.
+            ["readAt": "2026-10-12T19:10:00+00:00", "demand": "443.0", "consumptionDelta": "22.0000"],
+        ] as [Any], range: .sixHours, now: windowNow)
+    for (label, series, format) in [("hour", hourSeries, "HH:mm:ss"), ("6 hours", sixHourSeries, "HH:mm")] {
+        let filled = series.watts.indices.filter { series.watts[$0] != nil }
+        let values = filled.map { "\($0): \(powerText(series.watts[$0]!))" }
+        print("    \(label): \(series.watts.count) slots from \(formatted(series.start, format, tzLondon)), "
+            + "readings \(values), "
+            + "latest \(series.latest.map { powerText($0.watts) } ?? "none"), "
+            + "peak \(series.peak.map { "\(powerText($0.watts)) at \(formatted(series.slotStart($0.index), format, tzLondon))" } ?? "none"), "
+            + "\(String(format: "%.0f", series.energyWh)) Wh")
+    }
+    print("    refresh due: hour after 59 s \(hourSeries.isStale(now: windowNow.addingTimeInterval(59))), "
+        + "60 s \(hourSeries.isStale(now: windowNow.addingTimeInterval(60))); "
+        + "6 hours after 299 s \(sixHourSeries.isStale(now: windowNow.addingTimeInterval(299))), "
+        + "300 s \(sixHourSeries.isStale(now: windowNow.addingTimeInterval(300)))")
+    print("    nothing back: empty \(liveSeries(rows: [] as [Any], range: .day, now: windowNow).isEmpty), "
+        + "null \(liveSeries(rows: NSNull(), range: .day, now: windowNow).isEmpty)")
 
     // The alert fires in both directions now, so the rule has to name the right one. A merged
     // window must not produce a change in its middle, where nothing actually changes.
@@ -1002,7 +1043,8 @@ func selfTest() {
             case .separator: print("  ------")
             case .header(let t): print("  [\(t)]")
             case .text(let t): print("  \(t)")
-            case .info(let t, let detail), .live(let t, let detail):
+            case .live(let t, _, let detail): print("  → \(t) | \(detail)")
+            case .info(let t, let detail):
                 print("  \(t)")
                 for line in detail.components(separatedBy: "\n") { print("      \(line)") }
             case .action(let t, _, let detail): print("  → \(t)" + (detail.map { " | \($0)" } ?? ""))

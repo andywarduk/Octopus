@@ -204,7 +204,7 @@ extension AppDelegate {
         // Everything fetched belonged to that key: the account's meters, and each window's data.
         meterChoices = []
         refreshMeterPicker()
-        closeUsageWindows()
+        closeAccountWindows()
         carbonController.resetForMeterChange()
         Task { await OctopusSession.shared.invalidate() }
         removeButton?.isEnabled = false
@@ -242,7 +242,7 @@ extension AppDelegate {
         invalidateSnapshot()
         lastError = nil
         meterChoices = []
-        closeUsageWindows()
+        closeAccountWindows()
         // Another key may be another account, with another postcode.
         carbonController.resetForMeterChange()
         refresh(manual: true)

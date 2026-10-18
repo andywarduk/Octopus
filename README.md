@@ -73,6 +73,9 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   columns, one window per meter.
 - **Carbon intensity:** click the current figure in the menu's carbon intensity section to open
   how clean the grid is where you live, half hour by half hour.
+- **Live power:** with an Octopus Home Mini, click the live power figure (⌘L) to chart the power
+  you've used over the last hour from ten-second readings, or over 6 or 24 hours as five-minute
+  averages. It keeps updating while the window is open.
 
 ### Starting at login
 

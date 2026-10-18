@@ -74,6 +74,25 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
         renderCarbonChart(
             readings: [], now: start, tz: tz, dark: false, size: CGSize(width: 624, height: 300),
             placeholder: "No carbon intensity to show", to: "\(dir)/carbon-empty.png")
+
+        // The live power chart, at a fixed `now` for the same reason.
+        let liveNow = ISO8601DateFormatter().date(from: "2026-10-12T19:13:05Z")!
+        for (name, range, dark, hover) in [
+            ("hour-light", LivePowerRange.hour, false, Int?.none),
+            ("hour-dark", .hour, true, nil),
+            ("hour-tooltip", .hour, false, 200),
+            ("6h-light", .sixHours, false, nil),
+            ("24h-light", .day, false, nil),
+            ("24h-dark", .day, true, nil),
+            ("24h-tooltip", .day, false, 60),
+        ] {
+            renderLivePowerChart(
+                series: sampleLivePower(range: range, now: liveNow), dark: dark,
+                size: CGSize(width: 604, height: 260), hover: hover, to: "\(dir)/live-\(name).png")
+        }
+        renderLivePowerChart(
+            series: nil, dark: false, size: CGSize(width: 604, height: 260),
+            placeholder: "No readings from the Home Mini in the last hour", to: "\(dir)/live-empty.png")
     }
     exit(0)
 }

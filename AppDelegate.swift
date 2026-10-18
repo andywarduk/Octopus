@@ -24,7 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     /// What each action item in the menu opens, indexed by the item's tag.
     var menuActions: [MenuAction] = []
     /// The live power items, in order, so a fetch landing while the menu is open can rewrite them.
-    var liveItems: [NSMenuItem] = []
+    /// The detail row is the subtitle drawn as its own item, before macOS 14.
+    var liveItems: [(item: NSMenuItem, detailRow: NSMenuItem?)] = []
+    /// One live power window per meter with a Home Mini, keyed by its device id.
+    var livePowerControllers: [String: LivePowerWindowController] = [:]
     /// One window, with the source switchable inside it. Both sources answer regionally, so the
     /// postcode comes from whichever property's electricity meter is selected.
     lazy var carbonController = CarbonWindowController(
@@ -250,7 +253,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             carbonController.show()
         case .usage(let meter):
             usageController(for: meter).show()
+        case .livePower(let meter):
+            livePowerController(for: meter).show()
         }
+    }
+
+    func livePowerController(for meter: LiveMeter) -> LivePowerWindowController {
+        if let existing = livePowerControllers[meter.deviceId] { return existing }
+        let controller = LivePowerWindowController(
+            meter: meter, cascade: livePowerControllers.count, apiKey: { [weak self] in self?.apiKey })
+        livePowerControllers[meter.deviceId] = controller
+        return controller
     }
 
     func usageController(for meter: MeterChoice) -> UsageWindowController {
@@ -261,10 +274,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         return controller
     }
 
-    /// The usage windows belonged to the key: another key is another account's meters.
-    func closeUsageWindows() {
+    /// The usage and live power windows belonged to the key: another key is another account's meters.
+    func closeAccountWindows() {
         for controller in usageControllers.values { controller.close() }
         usageControllers.removeAll()
+        for controller in livePowerControllers.values { controller.close() }
+        livePowerControllers.removeAll()
     }
 
     @objc func refreshNow() { refresh(manual: true) }

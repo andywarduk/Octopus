@@ -43,6 +43,7 @@ nothing into one that didn't exist, without saying so, which reads as every imag
 
 `--chartdemo` renders the carbon chart as `carbon-*.png` alongside the usage ones. Its `now` rule
 is fixed rather than read from the clock, or the images differ run to run and a diff means nothing.
+The live power chart is `live-*.png`, from a seeded house at a fixed `now` for the same reason.
 
 `--chartdemo` also counts antialiased seams between half-hourly bars — pixels that are neither the
 surface nor a band colour. A handful is expected, at the edges of the deliberate no-readings gap
@@ -63,7 +64,9 @@ axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge
 wording, carbon parsing, cleanest and the mean mix, the mix basis wording and mean mix, the
 dispatch alert cooldown, a failed device query, the refresh split and its queries, page sizes and completeness across a clock change,
 tariff-end wording, login-item wording, live power (finding the meters with a Home Mini, the
-newest reading, tolerated errors, its wording and placement), and the menu text at three moments.
+newest reading, tolerated errors, its wording and placement), the live power window's slots
+(placement, the five-minute bucket still filling, energy, peak, when a refresh is due), and the
+menu text at three moments.
 
 ### Verifying UI changes without a display
 
@@ -96,6 +99,9 @@ settled by rendering it at a much lower value and confirming the difference.
 | `CarbonIntensity.swift` | Carbon intensity model and both sources' fetch and parsing |
 | `CarbonChart.swift` | The carbon intensity chart, its sequential ramp, and its renderer |
 | `CarbonWindowController.swift` | The carbon intensity window |
+| `LivePower.swift` | The live power window's ranges, its series of slots, and its telemetry fetch |
+| `LivePowerChart.swift` | The live power line chart, its renderer, and the seeded sample house |
+| `LivePowerWindowController.swift` | One live power window; one instance per meter with a Home Mini |
 | `AppIcon.swift` | The app icon, drawn in code |
 | `LoginItem.swift` | Start-at-login, via SMAppService |
 | `AppDelegate.swift` | Status item, the 30-second tick, the refresh cycle |
@@ -366,12 +372,17 @@ lightly:
   judged per day, since that is all it will ever send.
 - A fetch that returns nothing throws and is not cached, so revisiting an unpublished week costs
   seven requests each time. Tolerable at the moment; a short-lived negative entry would fix it.
-- **Live power costs no request of its own.** Which meters have a Home Mini comes from each
+- **The menu's live power costs no request of its own.** Which meters have a Home Mini comes from each
   property's `smartDeviceNetworks` on the hourly tariff request; the readings come from one
   `smartMeterTelemetry` alias per such meter (`t0`, `t1`…) on the device request — the newest
   `TEN_SECONDS` row of the last five minutes, `readAt` and `demand` only. Both are fetched with
   `gql(…, tolerating:)`, which drops errors whose path runs through the named fields, so a failure
   there leaves that field null instead of failing the prices or the charge plan with it.
+- **The live power window costs one request per refresh, and only while it is open**: once a
+  minute on the hour view, every five minutes on the six- and 24-hour views, which gain one
+  five-minute bucket at a time and so have nothing new to show sooner. Its timer stops itself once
+  the window is closed. A window left open on the hour view is 60 requests an hour, five times
+  the menu bar's own — the reason not to shorten that interval.
 - Automatic refreshing stops after 10 consecutive failures.
 
 Widening the window (a month, a year) multiplies requests linearly. Batch differently rather than
@@ -531,11 +542,11 @@ against real data. Treat those paths as unverified.
   PNGs show the worst case rather than what a Retina screen shows.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
-  The one exception is live power, and it is not a rebuild: `updateLiveItems` rewrites the text of
-  the `Line.live` items' labels in place. Opening the menu is what asks for a fresh reading, and it
-  lands a second later — without this the menu would show the previous refresh's figure, up to
-  five minutes old. A live line always has exactly one detail, reading or not, so the rewrite never
-  changes an item's height.
+  The one exception is live power, and it is not a rebuild: `updateLiveItems` rewrites the title
+  and subtitle of the `Line.live` items in place (before macOS 14, the subtitle's own row). Opening
+  the menu is what asks for a fresh reading, and it lands a second later — without this the menu
+  would show the previous refresh's figure, up to five minutes old. A live line always has exactly
+  one detail, reading or not, so the rewrite never changes an item's height.
 - **The icon encodes two things, one per visual channel.** The shape is the carbon intensity — a
   leaf at or under 100 gCO₂/kWh (`greenThresholdGrams`, the carbon chart's own line), smoke above —
   and fill plus colour is the rate: filled green when cheap, an outline template otherwise.
@@ -557,16 +568,32 @@ against real data. Treat those paths as unverified.
   keeps the last reading at its own time, through `carryForwardDevices`, rather than claiming the
   Mini has gone quiet. Negative demand is worded as exporting; that is unverified, since the
   development account has no generation.
+- **The live power chart is a line, not columns**, unlike the other two: 360 ten-second readings
+  are one continuous quantity, not periods to compare. A 2pt line over a 10% wash of the palette's
+  first slot, no legend for a single series, a crosshair and tooltip on hover. What a point means
+  depends on the grain, and the tooltip and footer say which: the hour plots `demand`, since a
+  ten-second delta is 0 or 1 Wh; the longer views plot each five-minute bucket's energy as an
+  average, since a grouped row's `demand` is one sample at its last reading. The bucket still
+  filling is left out — averaged over five minutes it would drag the line's end down — while the
+  hour keeps its newest reading, which is whole when taken. Readings sit in fixed slots, so a
+  missing one is a gap in place; up to three missing ten-second rows are drawn across, since one
+  goes missing every so often and is no more a gap than the space between two readings.
+- **The newest reading's label sits right of the plot**, in a margin kept for the widest figure.
+  Inside the plot a spike just before it — the kettle — ran through the label, and the margin is a
+  fixed width so the plot doesn't shift as the figure changes. Its dot has no surface ring: it ends
+  its own line rather than crossing it, and at five-minute spacing the ring hid the last segment.
 - **Menu order is current rate, upcoming cheap rate, carbon intensity, live power, cars, account, tariffs**,
   then Refresh Now, Settings… and Quit. **The windows open from the information itself**: the
   carbon section's "Now … gCO₂/kWh" line opens the carbon window, with when it is next green as
-  its subtitle, and each tariff line opens its meter's usage, with its end date as the subtitle —
+  its subtitle, each live power line opens that meter's live power window, with the reading's time
+  as the subtitle, and each tariff line opens its meter's usage, with its end date as the subtitle —
   macOS 14+; a grey line under it on 13 — and a tooltip saying what it opens. Until the carbon
   forecast loads, a plain "Carbon Intensity…" item stands in. A two-property account gets one
   usage item per address with nothing to match up, and an export tariff, having no usage, stays
   plain text. These are `Line.action` entries from `menuLines`, so `--selftest` prints their
   placement; `rebuildMenu` turns them into items, numbering the usage
-  items ⌘1, ⌘2… in listing order (none past nine) and giving the carbon one ⌘C. Each tariff carries its `MeterChoice`, built from the supply
+  items ⌘1, ⌘2… in listing order (none past nine), giving the carbon one ⌘C and the first live
+  power one ⌘L. Each tariff carries its `MeterChoice`, built from the supply
   point the tariff query returns, so the items need no meter discovery; an export meter gets
   none. The carbon item stays even with no Octopus data, since the window needs none. Usage
   windows are one per meter, keyed by `MeterChoice.id`, and closed when the key changes.

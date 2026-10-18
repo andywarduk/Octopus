@@ -289,7 +289,7 @@ func latestTelemetry(_ rows: Any?) -> (watts: Double, at: Date)? {
 func parseLivePower(_ data: [String: Any]?, meters: [LiveMeter]) -> [LivePower] {
     meters.indices.map { index in
         let latest = latestTelemetry(data?["t\(index)"])
-        return LivePower(property: meters[index].property, watts: latest?.watts, at: latest?.at)
+        return LivePower(meter: meters[index], watts: latest?.watts, at: latest?.at)
     }
 }
 
@@ -654,4 +654,4 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
         tz: tariff.tz, fetched: now)
 }
 
-private func iso8601(_ date: Date) -> String { isoParsers.whole.string(from: date) }
+func iso8601(_ date: Date) -> String { isoParsers.whole.string(from: date) }
