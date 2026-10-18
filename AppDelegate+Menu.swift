@@ -96,6 +96,7 @@ extension AppDelegate {
             if snapshot != nil { menu.addItem(.separator()) }
         }
         menuActions = []
+        liveItems = []
         let now = Date()
         // The forecast only when it is for the meter now selected; see currentCarbon.
         let carbon = currentCarbon(now: now) == nil ? [] : carbonReadings
@@ -124,6 +125,30 @@ extension AppDelegate {
         }
     }
 
+    /// Rewrites the live power lines of an open menu with the snapshot just fetched.
+    ///
+    /// The one exception to rebuilding only in `menuNeedsUpdate`, and not a rebuild: the items stay,
+    /// only their labels' text changes. Without it the figure is whatever the last refresh got, up
+    /// to five minutes old — and opening the menu is what asks for a fresh one, which lands a second
+    /// later with the menu still open. If the lines no longer match the items one for one, a Mini
+    /// paired or removed since the menu opened, it waits for the next opening.
+    func updateLiveItems() {
+        guard menuIsOpen, let s = snapshot else { return }
+        let fresh = livePowerLines(s, now: Date()).compactMap { line -> (title: String, detail: String)? in
+            if case .live(let title, let detail) = line { return (title, detail) }
+            return nil
+        }
+        guard fresh.count == liveItems.count else { return }
+        for (item, text) in zip(liveItems, fresh) {
+            // infoItem lays the title out first and the detail under it.
+            let labels = item.view?.subviews.compactMap { $0 as? NSTextField } ?? []
+            guard labels.count == 2 else { continue }
+            labels[0].stringValue = text.title
+            labels[1].stringValue = text.detail
+            for label in labels { label.sizeToFit() }
+        }
+    }
+
     private func add(_ lines: [Line]) {
         // Usage items are numbered ⌘1, ⌘2… in the order their tariffs are listed, so every meter
         // gets one, not just the first of each fuel; past nine they go without. Carbon keeps ⌘C.
@@ -136,12 +161,14 @@ extension AppDelegate {
                 menu.addItem(infoItem(t, font: .boldSystemFont(ofSize: NSFont.systemFontSize), color: .labelColor))
             case .text(let t):
                 menu.addItem(infoItem(t, font: .menuFont(ofSize: 0), color: .labelColor))
-            case .info(let title, let detail):
+            case .info(let title, let detail), .live(let title, let detail):
                 // An empty title is a detail standing alone, such as the price footnote with no
                 // line above it to belong to.
-                menu.addItem(infoItem(
+                let item = infoItem(
                     title.isEmpty ? nil : title, font: .menuFont(ofSize: 0), color: .labelColor,
-                    details: detail.components(separatedBy: "\n")))
+                    details: detail.components(separatedBy: "\n"))
+                menu.addItem(item)
+                if case .live = line { liveItems.append(item) }
             case .action(let title, let action, let detail):
                 let key: String
                 switch action {

@@ -62,7 +62,20 @@ func minutes(_ hhmmss: String) -> Int? {
     return p.count >= 2 ? p[0] * 60 + p[1] : nil
 }
 
-func gql(_ query: String, _ variables: [String: Any] = [:], token: String? = nil) async throws -> [String: Any] {
+/// The errors that should fail a request: all but those whose path runs through one of `fields`.
+/// GraphQL answers everything else alongside them, and something optional — live power, say —
+/// failing must not take the prices or the charge plan down with it.
+func untoleratedErrors(_ errors: [[String: Any]], tolerating fields: Set<String>) -> [[String: Any]] {
+    errors.filter { error in
+        let path = (error["path"] as? [Any]) ?? []
+        return !path.contains { ($0 as? String).map(fields.contains) ?? false }
+    }
+}
+
+/// - Parameter tolerating: fields whose errors are dropped, leaving them null in the reply.
+func gql(
+    _ query: String, _ variables: [String: Any] = [:], token: String? = nil, tolerating: Set<String> = []
+) async throws -> [String: Any] {
     var req = URLRequest(url: URL(string: "https://api.octopus.energy/v1/graphql/")!, timeoutInterval: 30)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -74,7 +87,9 @@ func gql(_ query: String, _ variables: [String: Any] = [:], token: String? = nil
     // A rate limit or an outage usually has no JSON body at all, and parsing it would report a
     // format error that hides the real cause.
     let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    if let errors = body?["errors"] as? [[String: Any]], let first = errors.first {
+    if let errors = body?["errors"] as? [[String: Any]],
+        let first = untoleratedErrors(errors, tolerating: tolerating).first
+    {
         throw ApiError(message: first["message"] as? String ?? "GraphQL error")
     }
     guard (200..<300).contains(status) else {
@@ -228,6 +243,56 @@ func parseTariffEnds(_ account: [String: Any], accountNumber: String = "", now: 
     }
 }
 
+/// The meters that can report live power: an electricity meter (ESME) on a home area network that
+/// also has a Home Mini (a CAD). Without the Mini, telemetry answers with no rows and no error, so
+/// asking for it would only add to the query. The Mini reports `NOT_APPLICABLE` while working
+/// perfectly, so nothing is filtered on `COMMISSIONED`; only devices taken off the network drop out.
+func parseLiveMeters(_ account: [String: Any]) -> [LiveMeter] {
+    let gone: Set<String> = ["DECOMMISSIONED", "WITHDRAWN"]
+    func objects(_ any: Any?) -> [[String: Any]] { ((any as? [Any]) ?? []).compactMap { $0 as? [String: Any] } }
+    var found: [LiveMeter] = []
+    for property in objects(account["properties"]) {
+        let place = firstLine(of: property["address"] as? String ?? "")
+        for network in objects(property["smartDeviceNetworks"]) {
+            let devices = objects(network["smartDevices"]).filter {
+                !gone.contains(($0["status"] as? String ?? "").uppercased())
+            }
+            func type(_ device: [String: Any]) -> String { (device["type"] as? String ?? "").uppercased() }
+            guard devices.contains(where: { ["CAD", "IHD_OR_CAD"].contains(type($0)) }) else { continue }
+            for device in devices where type(device) == "ESME" {
+                guard let id = device["deviceId"] as? String else { continue }
+                found.append(LiveMeter(deviceId: id, property: place))
+            }
+        }
+    }
+    return found
+}
+
+/// How far back the live power query looks. The Mini reports every ten seconds, so five minutes
+/// without a row means it has stopped, not that it is between readings.
+let liveLookback: TimeInterval = 5 * 60
+
+/// The newest reading in a `smartMeterTelemetry` reply. Rows arrive oldest first, but the newest is
+/// looked for rather than assumed last. Figures are strings, sometimes in exponent form.
+func latestTelemetry(_ rows: Any?) -> (watts: Double, at: Date)? {
+    let readings = ((rows as? [Any]) ?? []).compactMap { row -> (watts: Double, at: Date)? in
+        guard let row = row as? [String: Any], let at = parseDate(row["readAt"]),
+            let watts = toDouble(row["demand"])
+        else { return nil }
+        return (watts, at)
+    }
+    return readings.max { $0.at < $1.at }
+}
+
+/// Live power out of a `deviceQuery` reply, one per meter in `meters`, which is what its `t0`,
+/// `t1`… aliases refer to. A nil reply — the request failed — gives every meter no reading.
+func parseLivePower(_ data: [String: Any]?, meters: [LiveMeter]) -> [LivePower] {
+    meters.indices.map { index in
+        let latest = latestTelemetry(data?["t\(index)"])
+        return LivePower(property: meters[index].property, watts: latest?.watts, at: latest?.at)
+    }
+}
+
 /// How many distinct addresses the account holds, so a tariff covering all of them needs no
 /// naming and one covering a single address does.
 func propertyCount(_ account: [String: Any]) -> Int {
@@ -283,6 +348,9 @@ struct TariffState {
     var projectedBalancePence: Int?
     var tariffEnds: [TariffEnd]
     var propertyCount: Int
+    /// Meters with a Home Mini. Kept with the tariff because a Mini is paired about as often as a
+    /// tariff changes, and its readings ride on the device request.
+    var liveMeters: [LiveMeter] = []
     var fetched: Date
 
     var ratesFromTariff: Bool { cheapRate != nil && peakRate != nil }
@@ -328,7 +396,7 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
         balancePence: (accountNode["balance"] as? NSNumber)?.intValue,
         projectedBalancePence: (accountNode["projectedBalance"] as? NSNumber)?.intValue,
         tariffEnds: parseTariffEnds(accountNode, accountNumber: account, now: now),
-        propertyCount: propertyCount(accountNode), fetched: now)
+        propertyCount: propertyCount(accountNode), liveMeters: parseLiveMeters(accountNode), fetched: now)
 }
 
 /// The fast-moving half in one request: the devices, the charge plan for each device already known,
@@ -337,7 +405,10 @@ func parseTariffState(_ accountNode: [String: Any], account: String, mpan: Strin
 /// `flexPlannedDispatches` is keyed by device, so the ids have to be known before it can be asked
 /// for. They are taken from the previous refresh; a device that appears in the list but not in the
 /// ids gets its plan from a follow-up request, once, and is known from then on.
-func deviceQuery(deviceIds: [String], includeRates: Bool) -> String {
+///
+/// Live power rides here too, one `t0`, `t1`… alias per meter with a Home Mini, so it costs no
+/// request of its own. The caller tolerates errors on those aliases.
+func deviceQuery(deviceIds: [String], includeRates: Bool, liveMeters: Int = 0) -> String {
     let rateDefs = includeRates ? ",$m:String!,$s:DateTime!,$e:DateTime!,$n:Int!" : ""
     let rateField = includeRates
         ? "\n  applicableRates(accountNumber:$a,mpxn:$m,startAt:$s,endAt:$e,first:$n){edges{node{value}}}" : ""
@@ -345,8 +416,13 @@ func deviceQuery(deviceIds: [String], includeRates: Bool) -> String {
     let flexFields = deviceIds.indices
         .map { "\n  f\($0): flexPlannedDispatches(deviceId:$d\($0)){start end type energyAddedKwh}" }
         .joined()
+    let liveDefs = liveMeters > 0
+        ? ",$ls:DateTime!,$le:DateTime!" + (0..<liveMeters).map { ",$t\($0):String!" }.joined() : ""
+    let liveFields = (0..<liveMeters)
+        .map { "\n  t\($0): smartMeterTelemetry(deviceId:$t\($0),start:$ls,end:$le,grouping:TEN_SECONDS){readAt demand}" }
+        .joined()
     return """
-        query($a:String!\(rateDefs)\(flexDefs)){
+        query($a:String!\(rateDefs)\(flexDefs)\(liveDefs)){
           devices(accountNumber:$a){
             __typename id name
             ... on SmartFlexVehicle{
@@ -358,7 +434,7 @@ func deviceQuery(deviceIds: [String], includeRates: Bool) -> String {
               status{... on SmartFlexChargePointStatus{currentState isSuspended stateOfCharge{value timestamp} activePower{value timestamp}}}
             }
           }
-          completedDispatches(accountNumber:$a){start end}\(rateField)\(flexFields)
+          completedDispatches(accountNumber:$a){start end}\(rateField)\(flexFields)\(liveFields)
         }
         """
 }
@@ -445,7 +521,8 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
         // ride along on this request rather than costing another one. Intelligent Octopus Go
         // arrives as a HalfHourlyTariff, whose unitRates list is of unknown shape, so only its
         // standing charge is taken; its prices come from applicableRates, and the VAT to add to
-        // them from the standing charge's pre-VAT twin.
+        // them from the standing charge's pre-VAT twin. Each property's home area network says
+        // whether it has a Home Mini; an error there only costs live power, so it is tolerated.
         let agr = try await gql(
             """
             query($a:String!){account(accountNumber:$a){
@@ -480,9 +557,10 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
                   mprn
                   agreements{validFrom validTo isRevoked tariff{... on TariffType{displayName}}}
                 }
+                smartDeviceNetworks{smartDevices{deviceId type status}}
               }
             }}
-            """, ["a": account], token: token)
+            """, ["a": account], token: token, tolerating: ["smartDeviceNetworks"])
         tariff = try parseTariffState(
             agr["account"] as? [String: Any] ?? [:], account: account, mpan: mpan, now: now)
         await session.setTariff(tariff)
@@ -492,11 +570,22 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
     // which excludes VAT and only gives a set of values — and which errors without a page size, so
     // the size steps down if Octopus objects to it.
     let includeRates = !tariff.ratesFromTariff
+    let live = tariff.liveMeters
+    let liveAliases = Set(live.indices.map { "t\($0)" })
     func request(_ ids: [String]) async throws -> [String: Any] {
         var variables: [String: Any] = ["a": account]
         for (index, id) in ids.enumerated() { variables["d\(index)"] = id }
+        for (index, meter) in live.enumerated() { variables["t\(index)"] = meter.deviceId }
+        if !live.isEmpty {
+            variables["ls"] = iso8601(now.addingTimeInterval(-liveLookback))
+            // A minute's grace, so a Mac clock running behind Octopus's can't cut off the newest row.
+            variables["le"] = iso8601(now.addingTimeInterval(60))
+        }
+        func query(_ rates: Bool) -> String {
+            deviceQuery(deviceIds: ids, includeRates: rates, liveMeters: live.count)
+        }
         guard includeRates else {
-            return try await gql(deviceQuery(deviceIds: ids, includeRates: false), variables, token: token)
+            return try await gql(query(false), variables, token: token, tolerating: liveAliases)
         }
         variables["m"] = mpan
         variables["s"] = iso8601(now)
@@ -505,7 +594,7 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
         for size in [100, 50, 25, 10] {
             variables["n"] = size
             do {
-                return try await gql(deviceQuery(deviceIds: ids, includeRates: true), variables, token: token)
+                return try await gql(query(true), variables, token: token, tolerating: liveAliases)
             } catch let e as ApiError {
                 lastError = e
                 if !e.message.lowercased().contains("pagination") { throw e }
@@ -559,6 +648,7 @@ func fetchSnapshot(apiKey: String, force: Bool = false) async throws -> Snapshot
     return Snapshot(
         cheapRate: cheap, peakRate: peak, standingCharge: tariff.standingCharge, windows: tariff.windows,
         dispatches: devices?.dispatches ?? [], cars: devices?.cars ?? [], devicesKnown: devices != nil,
+        livePower: parseLivePower(data, meters: live),
         balancePence: tariff.balancePence, projectedBalancePence: tariff.projectedBalancePence,
         tariffEnds: tariff.tariffEnds, propertyCount: tariff.propertyCount,
         tz: tariff.tz, fetched: now)

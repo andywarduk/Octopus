@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var usageControllers: [String: UsageWindowController] = [:]
     /// What each action item in the menu opens, indexed by the item's tag.
     var menuActions: [MenuAction] = []
+    /// The live power items, in order, so a fetch landing while the menu is open can rewrite them.
+    var liveItems: [NSMenuItem] = []
     /// One window, with the source switchable inside it. Both sources answer regionally, so the
     /// postcode comes from whichever property's electricity meter is selected.
     lazy var carbonController = CarbonWindowController(
@@ -163,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                     snapshot = current
                     lastError = nil
                     failures = 0
+                    updateLiveItems()
                     if let previous { checkDispatchChange(from: previous, to: current) }
                     // Unlike a dispatch change this needs no comparison, so it runs on the first
                     // fetch too — an expiry a fortnight away shouldn't wait for a second refresh.

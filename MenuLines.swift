@@ -131,6 +131,8 @@ func menuLines(_ s: Snapshot, now: Date, carbon: [CarbonReading] = []) -> [Line]
 
     // Next to the rates, since both answer "is now a good time to use power?".
     lines += carbonLines(carbon, now: now, tz: tz)
+    // And how much is being used, which is what those two are weighed against.
+    lines += livePowerLines(s, now: now)
 
     lines.append(.separator)
     lines.append(.header(s.cars.count == 1 ? "Car" : "Cars"))
@@ -210,6 +212,34 @@ func carbonLines(_ readings: [CarbonReading], now: Date, tz: TimeZone) -> [Line]
         .separator, .header("Carbon intensity"),
         .action("Now \(formatGrams(current.grams)) · \(current.index.title.lowercased())", .carbon, detail: green),
     ]
+}
+
+/// What the Home Mini says is being drawn, one line per meter that has one, with when it was read.
+/// No section at all when no meter has a Mini.
+///
+/// Every line carries exactly one detail, reading or not, so the open menu can rewrite it in place
+/// without the item changing height.
+func livePowerLines(_ s: Snapshot, now: Date) -> [Line] {
+    guard !s.livePower.isEmpty else { return [] }
+    let tz = s.tz
+    func clock(_ date: Date) -> String {
+        calendar(tz).isDate(date, inSameDayAs: now) ? formatted(date, "HH:mm:ss", tz) : stamp(date, now: now, tz)
+    }
+    var lines: [Line] = [.separator, .header("Live power")]
+    for reading in s.livePower {
+        // The address only earns its place when the account has more than one.
+        let at = s.propertyCount > 1 && !reading.property.isEmpty ? " at \(reading.property)" : ""
+        guard let watts = reading.watts, let when = reading.at else {
+            let title = s.devicesKnown ? "No reading in the last \(Int(liveLookback / 60)) minutes" : "Couldn't load live power"
+            lines.append(.live(title + at, detail: "Checked at \(clock(s.fetched))"))
+            continue
+        }
+        // Not seen yet: the account this was built on has no generation. Worded rather than
+        // printed as a negative figure in case export does come through as negative demand.
+        let verb = watts < 0 ? "Exporting" : "Using"
+        lines.append(.live("\(verb) \(powerText(watts))\(at)", detail: "As of \(clock(when))"))
+    }
+    return lines
 }
 
 /// A title with its details under it in the subtitle style, or a plain line when there are none.

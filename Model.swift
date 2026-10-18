@@ -38,6 +38,23 @@ struct Car {
     var suspended: Bool?
 }
 
+/// An electricity meter whose home area network has a Home Mini on it — the only kind
+/// `smartMeterTelemetry` answers for. Found on the hourly tariff request.
+struct LiveMeter: Equatable {
+    /// The meter's own device id (its ESME), which is what telemetry is keyed on — not the Mini's.
+    var deviceId: String
+    /// Short address of the property it is at.
+    var property: String
+}
+
+/// The newest reading from one `LiveMeter`.
+struct LivePower {
+    var property: String
+    /// Demand in watts at `at`. Nil when nothing came back for the last few minutes.
+    var watts: Double?
+    var at: Date?
+}
+
 /// One active agreement, exactly as the account holds it — one per meter point, never merged.
 /// Two houses on the same tariff are two agreements, and the menu says so.
 struct TariffEnd: Equatable {
@@ -71,6 +88,9 @@ struct Snapshot {
     /// completed slots — which is "don't know", not "no car and nothing planned", and must not be
     /// compared against a plan that was known.
     var devicesKnown = true
+    /// One per meter with a Home Mini, in listing order. Fetched with the devices, so it shares
+    /// their known-ness: when that request fails these are the last readings, at their own times.
+    var livePower: [LivePower] = []
     /// Account balance and the balance Octopus expects in a year, both in pence. Positive is
     /// credit. Nil when the account didn't report them.
     var balancePence: Int?
@@ -93,6 +113,10 @@ enum Line {
     /// A line with its details under it in the subtitle style — the non-clickable counterpart of an
     /// action's subtitle. `detail` may hold several lines, separated by newlines.
     case info(String, detail: String)
+    /// An `info` line whose figure changes by the second. Drawn the same, but a fetch that lands
+    /// while the menu is open rewrites it in place, since the menu itself can't be rebuilt then.
+    /// Always exactly one line of detail, so rewriting it never changes the item's height.
+    case live(String, detail: String)
     /// A clickable item that opens a window, placed beside the information it belongs to. `detail`
     /// is a secondary line under it — the item's subtitle where macOS supports one.
     case action(String, MenuAction, detail: String? = nil)

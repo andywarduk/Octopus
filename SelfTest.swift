@@ -752,7 +752,7 @@ func selfTest() {
         switch line {
         case .header(let t): print("    [\(t)]")
         case .text(let t): print("    \(t)")
-        case .info(let t, let detail):
+        case .info(let t, let detail), .live(let t, let detail):
             print("    \(t)")
             for line in detail.components(separatedBy: "\n") { print("        \(line)") }
         case .action(let t, _, let detail): print("    → \(t)" + (detail.map { " | \($0)" } ?? ""))
@@ -842,12 +842,111 @@ func selfTest() {
         case .separator: print("      ------")
         case .header(let t): print("      [\(t)]")
         case .text(let t): print("      \(t)")
-        case .info(let t, let detail):
+        case .info(let t, let detail), .live(let t, let detail):
             print("      \(t)")
             for line in detail.components(separatedBy: "\n") { print("          \(line)") }
         case .action(let t, _, let detail): print("      → \(t)" + (detail.map { " | \($0)" } ?? ""))
         }
     }
+
+    // Live power from a Home Mini: which meters can give it, the newest reading, what the menu says.
+    print("  live power:")
+    let hanNode: [String: Any] = [
+        "properties": [
+            ["address": "1 Test Lane, Corsham, SN13 9XX",
+             "smartDeviceNetworks": [["smartDevices": [
+                ["deviceId": "E1", "type": "ESME", "status": "COMMISSIONED"],
+                ["deviceId": "G1", "type": "GSME", "status": "COMMISSIONED"],
+                // The Mini reports NOT_APPLICABLE while working.
+                ["deviceId": "C1", "type": "CAD", "status": "NOT_APPLICABLE"],
+                // A meter swapped out stays listed.
+                ["deviceId": "E0", "type": "ESME", "status": "DECOMMISSIONED"],
+             ]]]],
+            // No Mini, so telemetry would only ever come back empty.
+            ["address": "9 Other Road, Corsham, SN13 9YY",
+             "smartDeviceNetworks": [["smartDevices": [
+                ["deviceId": "E2", "type": "ESME", "status": "COMMISSIONED"],
+                ["deviceId": "P2", "type": "PPMID", "status": "COMMISSIONED"],
+             ]]]],
+            // A Mini taken off the network.
+            ["address": "3 Third Street",
+             "smartDeviceNetworks": [["smartDevices": [
+                ["deviceId": "E3", "type": "ESME", "status": "COMMISSIONED"],
+                ["deviceId": "C3", "type": "CAD", "status": "DECOMMISSIONED"],
+             ]]]],
+            // A network whose error was tolerated, leaving it null.
+            ["address": "4 Fourth Avenue", "smartDeviceNetworks": NSNull()],
+        ],
+    ]
+    let liveMeters = parseLiveMeters(hanNode)
+    print("    meters with a Mini: \(liveMeters.map { "\($0.deviceId) at \($0.property)" })")
+    let liveQuery = deviceQuery(deviceIds: ["d1"], includeRates: false, liveMeters: liveMeters.count)
+    print("    device query: \(liveQuery.components(separatedBy: "smartMeterTelemetry").count - 1) telemetry alias, "
+        + "none without a Mini: \(!deviceQuery(deviceIds: ["d1"], includeRates: false).contains("smartMeterTelemetry"))")
+    let telemetryReply: [String: Any] = [
+        // Out of order, and one figure in exponent form, as normalised decimals arrive.
+        "t0": [
+            ["readAt": "2026-09-19T15:12:30+00:00", "demand": "437.0"],
+            ["readAt": "2026-09-19T15:12:50+00:00", "demand": "4.43E+2"],
+            ["readAt": "2026-09-19T15:12:40+00:00", "demand": "440.0"],
+        ],
+        "t1": [] as [Any],
+        "t2": NSNull(),
+    ]
+    let threeMeters = [LiveMeter(deviceId: "E1", property: "1 Test Lane"),
+                       LiveMeter(deviceId: "E2", property: "9 Other Road"),
+                       LiveMeter(deviceId: "E3", property: "3 Third Street")]
+    for reading in parseLivePower(telemetryReply, meters: threeMeters) {
+        print("    reply, \(reading.property): "
+            + (reading.watts.map { "\(powerText($0)) at \(formatted(reading.at!, "HH:mm:ss", tzLondon))" } ?? "no reading"))
+    }
+    print("    failed request: \(parseLivePower(nil, meters: threeMeters).map { $0.watts == nil ? "no reading" : "?" })")
+    let liveErrors: [[String: Any]] = [
+        ["message": "Unauthorized", "path": ["t0"]],
+        ["message": "Network error", "path": ["account", "properties", 1, "smartDeviceNetworks"]],
+        ["message": "Device error", "path": ["devices", 0, "status"]],
+        ["message": "No path at all"],
+    ]
+    print("    errors still failing the request: "
+        + "\(untoleratedErrors(liveErrors, tolerating: ["t0", "smartDeviceNetworks"]).compactMap { $0["message"] as? String })")
+    let liveNow = date("2026-09-19T15:13:20Z")
+    let readAt = date("2026-09-19T15:13:10Z")
+    func withLive(_ readings: [LivePower], houses: Int = 1, known: Bool = true) -> Snapshot {
+        var copy = snap
+        copy.livePower = readings
+        copy.propertyCount = houses
+        copy.devicesKnown = known
+        return copy
+    }
+    for (label, s) in [
+        ("443 W", withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt)])),
+        ("999.6 W", withLive([LivePower(property: "1 Test Lane", watts: 999.6, at: readAt)])),
+        ("7432 W", withLive([LivePower(property: "1 Test Lane", watts: 7432, at: readAt)])),
+        ("negative", withLive([LivePower(property: "1 Test Lane", watts: -1250, at: readAt)])),
+        ("yesterday's reading", withLive([LivePower(property: "1 Test Lane", watts: 300, at: date("2026-09-18T20:00:00Z"))])),
+        ("two houses, one silent",
+         withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt), LivePower(property: "9 Other Road")], houses: 2)),
+        ("devices failed, nothing carried", withLive([LivePower(property: "1 Test Lane")], known: false)),
+        ("no Mini", withLive([])),
+    ] {
+        let texts = livePowerLines(s, now: liveNow).compactMap { line -> String? in
+            if case .live(let title, let detail) = line { return "\(title) | \(detail)" }
+            return nil
+        }
+        print("    \(label.padding(toLength: 32, withPad: " ", startingAt: 0)): "
+            + (texts.isEmpty ? "(no section)" : texts.joined(separator: " / ")))
+    }
+    let liveFailed = carryForwardDevices(
+        withLive([LivePower(property: "1 Test Lane")], known: false),
+        from: withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt)]), now: liveNow)
+    print("    failed fetch after a good one: \(liveFailed.livePower.map { $0.watts.map(powerText) ?? "no reading" }), "
+        + "known \(liveFailed.devicesKnown)")
+    let headers = menuLines(withLive([LivePower(property: "1 Test Lane", watts: 443, at: readAt)]), now: liveNow)
+        .compactMap { line -> String? in
+            if case .header(let title) = line { return title }
+            return nil
+        }
+    print("    placement: \(headers.joined(separator: " → "))")
 
     // The alert fires in both directions now, so the rule has to name the right one. A merged
     // window must not produce a change in its middle, where nothing actually changes.
@@ -903,7 +1002,7 @@ func selfTest() {
             case .separator: print("  ------")
             case .header(let t): print("  [\(t)]")
             case .text(let t): print("  \(t)")
-            case .info(let t, let detail):
+            case .info(let t, let detail), .live(let t, let detail):
                 print("  \(t)")
                 for line in detail.components(separatedBy: "\n") { print("      \(line)") }
             case .action(let t, _, let detail): print("  → \(t)" + (detail.map { " | \($0)" } ?? ""))

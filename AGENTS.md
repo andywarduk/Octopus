@@ -62,7 +62,8 @@ tariff), both reading shapes, unpublished days, zero-usage days, week windows, c
 axis steps, agreement-end parsing and its alert thresholds, the SmartFlex charge goal, balance
 wording, carbon parsing, cleanest and the mean mix, the mix basis wording and mean mix, the
 dispatch alert cooldown, a failed device query, the refresh split and its queries, page sizes and completeness across a clock change,
-tariff-end wording, login-item wording, and the menu text at three moments.
+tariff-end wording, login-item wording, live power (finding the meters with a Home Mini, the
+newest reading, tolerated errors, its wording and placement), and the menu text at three moments.
 
 ### Verifying UI changes without a display
 
@@ -80,7 +81,7 @@ settled by rendering it at a much lower value and confirming the difference.
 
 | File | Contents |
 | --- | --- |
-| `Model.swift` | `Interval`, `Car`, `Snapshot`, `Line` |
+| `Model.swift` | `Interval`, `Car`, `LiveMeter`, `LivePower`, `Snapshot`, `Line` |
 | `RateLogic.swift` | Pure functions over a `Snapshot`: cheap windows, rate changes, the charge plan, fetch interval, tariff-end alerts |
 | `MenuLines.swift` | The status item's symbol and tooltip, and every line of the menu |
 | `Formatting.swift` | Dates, times and amounts, the shared London timezone and calendar |
@@ -365,6 +366,12 @@ lightly:
   judged per day, since that is all it will ever send.
 - A fetch that returns nothing throws and is not cached, so revisiting an unpublished week costs
   seven requests each time. Tolerable at the moment; a short-lived negative entry would fix it.
+- **Live power costs no request of its own.** Which meters have a Home Mini comes from each
+  property's `smartDeviceNetworks` on the hourly tariff request; the readings come from one
+  `smartMeterTelemetry` alias per such meter (`t0`, `t1`…) on the device request — the newest
+  `TEN_SECONDS` row of the last five minutes, `readAt` and `demand` only. Both are fetched with
+  `gql(…, tolerating:)`, which drops errors whose path runs through the named fields, so a failure
+  there leaves that field null instead of failing the prices or the charge plan with it.
 - Automatic refreshing stops after 10 consecutive failures.
 
 Widening the window (a month, a year) multiplies requests linearly. Batch differently rather than
@@ -524,6 +531,11 @@ against real data. Treat those paths as unverified.
   PNGs show the worst case rather than what a Retina screen shows.
 - **The menu is rebuilt only in `menuNeedsUpdate`**, which runs before display. Rebuilding an open
   menu makes it flicker or close, and anything fetched while it is open shows next time it opens.
+  The one exception is live power, and it is not a rebuild: `updateLiveItems` rewrites the text of
+  the `Line.live` items' labels in place. Opening the menu is what asks for a fresh reading, and it
+  lands a second later — without this the menu would show the previous refresh's figure, up to
+  five minutes old. A live line always has exactly one detail, reading or not, so the rewrite never
+  changes an item's height.
 - **The icon encodes two things, one per visual channel.** The shape is the carbon intensity — a
   leaf at or under 100 gCO₂/kWh (`greenThresholdGrams`, the carbon chart's own line), smoke above —
   and fill plus colour is the rate: filled green when cheap, an outline template otherwise.
@@ -538,7 +550,14 @@ against real data. Treat those paths as unverified.
   leaf for that half hour, as it does everywhere else. The menu's carbon section (`carbonLines`)
   works from the same readings and says when the grid is next green; it names no "cleanest half
   hour", which is the carbon window's job.
-- **Menu order is current rate, upcoming cheap rate, carbon intensity, cars, account, tariffs**,
+- **Live power is shown for every meter with a Home Mini**, not just the one the menu bar follows:
+  the Mini is a device at an address, and a two-property account may have it at the house whose
+  rates aren't the ones shown. It is named by address only when the account has more than one,
+  like the tariffs, and the section is absent entirely without a Mini. A failed device request
+  keeps the last reading at its own time, through `carryForwardDevices`, rather than claiming the
+  Mini has gone quiet. Negative demand is worded as exporting; that is unverified, since the
+  development account has no generation.
+- **Menu order is current rate, upcoming cheap rate, carbon intensity, live power, cars, account, tariffs**,
   then Refresh Now, Settings… and Quit. **The windows open from the information itself**: the
   carbon section's "Now … gCO₂/kWh" line opens the carbon window, with when it is next green as
   its subtitle, and each tariff line opens its meter's usage, with its end date as the subtitle —

@@ -59,7 +59,8 @@ access page of your Octopus dashboard. It is stored in your login Keychain, neve
   Until the carbon forecast has loaded it shows a bolt, filled green or outlined the same way, and
   a warning triangle if there is no data or an error. Hover it for the current price and intensity.
 - **Menu:** the current rate and when it next changes, the carbon intensity now and when it is
-  next green (100 gCO₂/kWh or under), the charge Octopus has planned for tonight,
+  next green (100 gCO₂/kWh or under), the power you are using right now if you have an Octopus
+  Home Mini, the charge Octopus has planned for tonight,
   each car's charge level in both percent and kWh, charging status and today's charging goal, your account balance, any
   fixed tariff about to end, and the cheap windows in the next 48 hours including smart-charge
   dispatches.

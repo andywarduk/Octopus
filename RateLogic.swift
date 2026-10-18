@@ -82,6 +82,9 @@ func carryForwardDevices(_ fetched: Snapshot, from previous: Snapshot?, now: Dat
     // a failed one lost them too — but once ended they no longer affect any cheap window, and a
     // slot still running is in the plan still to come.
     merged.dispatches += futureDispatches(previous, now: now)
+    // Live power came in the same request. The last readings stand, at their own times, which say
+    // how old they are — better than claiming the Mini has gone quiet.
+    if !previous.livePower.isEmpty { merged.livePower = previous.livePower }
     merged.devicesKnown = previous.devicesKnown
     return merged
 }

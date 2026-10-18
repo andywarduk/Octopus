@@ -234,6 +234,24 @@
           About 30.5 of 49.2 kWh in the battery
           Not charging · smart control not available
           Charge level as of Today 15:08
+  live power:
+    meters with a Mini: ["E1 at 1 Test Lane"]
+    device query: 1 telemetry alias, none without a Mini: true
+    reply, 1 Test Lane: 443 W at 16:12:50
+    reply, 9 Other Road: no reading
+    reply, 3 Third Street: no reading
+    failed request: ["no reading", "no reading", "no reading"]
+    errors still failing the request: ["Device error", "No path at all"]
+    443 W                           : Using 443 W | As of 16:13:10
+    999.6 W                         : Using 1.0 kW | As of 16:13:10
+    7432 W                          : Using 7.4 kW | As of 16:13:10
+    negative                        : Exporting 1.2 kW | As of 16:13:10
+    yesterday's reading             : Using 300 W | As of Yesterday 21:00
+    two houses, one silent          : Using 443 W at 1 Test Lane | As of 16:13:10 / No reading in the last 5 minutes at 9 Other Road | Checked at 16:13:00
+    devices failed, nothing carried : Couldn't load live power | Checked at 16:13:00
+    no Mini                         : (no section)
+    failed fetch after a good one: ["443 W"], known true
+    placement: Standard rate now · 30.37p/kWh → Upcoming cheap rate → Carbon intensity → Live power → Cars → Account → Tariffs
   status icon:
     cheap, low carbon         : leaf.fill
     cheap, high carbon        : smoke.fill

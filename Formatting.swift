@@ -56,6 +56,13 @@ func stamp(_ date: Date, now: Date, _ tz: TimeZone) -> String {
 
 func pence(_ v: Double) -> String { String(format: "%.2fp/kWh", v) }
 
+/// Power as it reads best: whole watts below a kilowatt, kilowatts to one place from there. Rounded
+/// first, so 999.6 W reads "1.0 kW" rather than "1000 W". The sign is the caller's to word.
+func powerText(_ watts: Double) -> String {
+    let w = abs(watts).rounded()
+    return w < 1000 ? String(format: "%.0f W", w) : String(format: "%.1f kW", w / 1000)
+}
+
 func money(_ pence: Int) -> String { String(format: "£%.2f", Double(abs(pence)) / 100) }
 
 /// Octopus states a balance as positive when you are in credit, so the sign carries the meaning
