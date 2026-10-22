@@ -254,18 +254,18 @@
     placement: Standard rate now · 30.37p/kWh → Upcoming cheap rate → Carbon intensity → Live power → Cars → Account → Tariffs
   live power window:
     hour: 360 slots from 19:13:10, readings ["0: 310 W", "357: 440 W", "359: 443 W"], latest 443 W, peak 443 W at 20:13:00, 4 Wh
-    6 hours: 72 slots from 14:10, readings ["0: 276 W", "71: 468 W"], latest 468 W, peak 468 W at 20:05, 62 Wh
+    6 hours: 72 slots from 14:10, readings ["0: 276 W", "4: 7.2 kW over 4 slots", "70: 7 W over 66 slots", "71: 468 W"], latest 468 W, peak 7.2 kW at 14:30, 2502 Wh
     refresh due: hour after 59 s false, 60 s true; 6 hours after 299 s false, 300 s true
     nothing back: empty true, null true
   gas from the Home Mini:
     device: gas G1, electricity beside an export meter E1, two gas meters none, no Mini none
     unpublished and ended: 6 half hours, 20:00–23:00
-    stand-ins: 3 half hours, buckets ["4.275 kWh £0.3492", "1.500 kWh £0.1225"], standing 3
-    the day: 7.78 kWh, 3 half hours from the Mini, provisional true, complete false
-    half hours: 3 provisional, 5 still unpublished, zero-use stand-in has data true
+    stand-ins: 6 half hours, buckets ["4.275 kWh £0.3492", "1.500 kWh £0.1225", "1.000 kWh £0.0817", "1.000 kWh £0.0817", "1.000 kWh £0.0817"], standing 6
+    the day: 10.78 kWh, 6 half hours from the Mini, provisional true, complete false
+    half hours: 6 provisional, 2 still unpublished, zero-use stand-in has data true
   electricity from the Home Mini:
     priced: 02:00 off-peak 6.90p, 13:00 smart charge 6.90p, 16:00 neither 30.37p, 23:30 off-peak 6.90p
-    banded: 13:00 Smart charge 3.5 kWh £0.24; 16:00 Standard 0.4 kWh £0.12
+    banded: 13:00 Smart charge 3.5 kWh £0.24; 14:00 Smart charge 0.4 kWh £0.03; 14:30 Standard 0.4 kWh £0.12; 15:00 Standard 0.4 kWh £0.12
     Agile filled: false, single rate: 24.50p day and night, gas: 8.17p
   status icon:
     cheap, low carbon         : leaf.fill

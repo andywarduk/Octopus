@@ -968,6 +968,12 @@ func selfTest() {
         rows: [
             ["readAt": "2026-10-12T13:05:00+00:00", "demand": "250.0", "consumptionDelta": "20.0000"],
             ["readAt": "2026-10-12T13:10:00+00:00", "demand": "260.0", "consumptionDelta": "23.0000"],
+            // Nothing for 13:15–13:25: the Mini dropped out, and the next delta spans the gap, so it is
+            // averaged over all four buckets rather than plotted as four buckets' worth in one.
+            ["readAt": "2026-10-12T13:30:00+00:00", "demand": "7000.0", "consumptionDelta": "2400.0000"],
+            // This fixture has no rows between 13:30 and here, so 19:00 is averaged across all of those
+            // five and a half hours, exactly as a long dropout would be.
+            ["readAt": "2026-10-12T19:00:00+00:00", "demand": "452.0", "consumptionDelta": "40.0000"],
             // demand is one sample at the bucket's last reading; the plotted figure is the energy's average.
             ["readAt": "2026-10-12T19:05:00+00:00", "demand": "451.0", "consumptionDelta": "39.0000"],
             // Still filling at 19:13:05.
@@ -975,7 +981,10 @@ func selfTest() {
         ] as [Any], range: .sixHours, now: windowNow)
     for (label, series, format) in [("hour", hourSeries, "HH:mm:ss"), ("6 hours", sixHourSeries, "HH:mm")] {
         let filled = series.watts.indices.filter { series.watts[$0] != nil }
-        let values = filled.map { "\($0): \(powerText(series.watts[$0]!))" }
+        let values = filled.map { index -> String in
+            let covered = series.slotsCovered(index)
+            return "\(index): \(powerText(series.watts[index]!))" + (covered > 1 ? " over \(covered) slots" : "")
+        }
         print("    \(label): \(series.watts.count) slots from \(formatted(series.start, format, tzLondon)), "
             + "readings \(values), "
             + "latest \(series.latest.map { powerText($0.watts) } ?? "none"), "
@@ -1023,8 +1032,8 @@ func selfTest() {
     func slotTime(_ index: Int) -> String { iso8601(gasDay.addingTimeInterval(Double(index) * 1800)) }
     let gasFill = homeMiniFill(
         rows: [
-            // Published already: Octopus's figure wins.
-            ["readAt": slotTime(10), "consumptionDelta": "9999.00", "costDeltaWithTax": "81.67"],
+            // Published already: Octopus's figure wins. Read only as where the next row's energy began.
+            ["readAt": slotTime(39), "consumptionDelta": "9999.00", "costDeltaWithTax": "81.67"],
             ["readAt": slotTime(40), "consumptionDelta": "4275.06", "costDeltaWithTax": "34.9167"],
             // Used nothing: still data, with its standing charge.
             ["readAt": slotTime(41), "consumptionDelta": "0.00", "costDeltaWithTax": "0E-7"],
@@ -1032,6 +1041,9 @@ func selfTest() {
             ["readAt": slotTime(42), "consumptionDelta": "1.5E+3", "costDeltaWithTax": NSNull()],
             // The same half hour twice: counted once.
             ["readAt": slotTime(42), "consumptionDelta": "1500.00"],
+            // The Mini dropped out for 21:30 and 22:00: this row's energy covers both and its own
+            // half hour, so it is spread across all three.
+            ["readAt": slotTime(45), "consumptionDelta": "3000.00", "costDeltaWithTax": NSNull()],
         ] as [Any],
         missing: Set(missingSlots), standingPerHalfHour: 1.03, price: { _ in 8.17 })
     print("    stand-ins: \(gasFill.slots.count) half hours, buckets "
@@ -1061,7 +1073,7 @@ func selfTest() {
         standing: (0..<24).map { (elecSlot($0), 1.14) },
         tz: tzLondon, from: elecDay, to: elecDay.addingTimeInterval(86400), readings: 24,
         offPeakWindows: fallbackWindows)
-    let elecDispatch = [(start: elecSlot(26), end: elecSlot(28))]
+    let elecDispatch = [(start: elecSlot(26), end: elecSlot(29))]
     if let pricing = standInPricing(elecSeries, fuel: .electricity, dispatches: elecDispatch) {
         let priced = [("02:00 off-peak", 4), ("13:00 smart charge", 26), ("16:00 neither", 32), ("23:30 off-peak", 47)]
             .map { "\($0.0) \(pricing(elecSlot($0.1)).map { String(format: "%.2fp", $0) } ?? "none")" }
@@ -1070,8 +1082,12 @@ func selfTest() {
     let elecMissing = unpublishedHalfHours(elecSeries, now: elecSlot(40))
     let elecFill = homeMiniFill(
         rows: [
+            ["readAt": iso8601(elecSlot(25)), "consumptionDelta": "200.0000", "costDeltaWithTax": NSNull()],
             ["readAt": iso8601(elecSlot(26)), "consumptionDelta": "3500.0000", "costDeltaWithTax": NSNull()],
-            ["readAt": iso8601(elecSlot(32)), "consumptionDelta": "400.0000", "costDeltaWithTax": NSNull()],
+            ["readAt": iso8601(elecSlot(27)), "consumptionDelta": "3500.0000", "costDeltaWithTax": NSNull()],
+            // A dropout over 14:00 and 14:30, across the end of the smart charge at 14:30: the energy
+            // is spread over the three half hours, and each is priced at its own time.
+            ["readAt": iso8601(elecSlot(30)), "consumptionDelta": "1200.0000", "costDeltaWithTax": NSNull()],
         ] as [Any],
         missing: Set(elecMissing), standingPerHalfHour: 1.14,
         price: standInPricing(elecSeries, fuel: .electricity, dispatches: elecDispatch) ?? { _ in nil })
@@ -1079,7 +1095,7 @@ func selfTest() {
     elecSeries.standing += elecFill.standing
     elecSeries.homeMiniSlots = elecFill.slots
     let elecHalfHours = elecSeries.periods(.halfHour)
-    let banded = [26, 32].map { index -> String in
+    let banded = [26, 28, 29, 30].map { index -> String in
         let period = elecHalfHours[index]
         let bands = RateBand.allCases.filter { $0.isConsumption && period.value($0, .kwh) > 0 }
             .map { "\($0.rawValue) \(String(format: "%.1f kWh £%.2f", period.value($0, .kwh), period.value($0, .money) / 100))" }

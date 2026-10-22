@@ -226,6 +226,12 @@ These were all found the hard way; each one produced a plausible-looking wrong a
   - The register resolves whole watt-hours, so a `TEN_SECONDS` delta is mostly 0 or 1. Use
     `demand` at fine groupings. A ten-second row goes missing now and then (19:12:40 was absent
     between :30 and :50); the next row's delta spans the gap.
+  - **The same holds at every grouping, and a dropout is longer than a row.** On 22 October 2026
+    the Mini sent nothing from about 04:50 to 05:10 while the car charged at about 7 kW; the
+    05:10 five-minute row came back with 2,791 Wh — the whole gap's energy — which read as
+    33.5 kW when divided by its own five minutes. A missing bucket means no readings, not lost
+    ones: the first delta after it is the register's change since the last reading, so average
+    it over the gap as well.
   - On grouped rows `demand` is the sample at the bucket's last reading, the same instant as
     `consumption` — not the bucket's average. The 18:00 hour and the 18:30 half hour inside it
     both read 496 W on the same register, while their deltas imply 409 W and 428 W. Average power
@@ -605,6 +611,12 @@ against real data. Treat those paths as unverified.
     such device. It reaches the usage window as `MeterChoice.homeMiniDevice`, set from the tariff
     listing — meter discovery leaves it nil, and it is not part of `id`, so pairing a Mini doesn't
     orphan a saved choice.
+  - **A dropout's energy is spread across it.** A row's energy is the register's change since the
+    previous row, so after half hours with none it covers them too. `homeMiniFill` shares it evenly
+    across the gap and its own half hour, each priced at its own time, and drops the shares that
+    land on published half hours. Heaped on one half hour it drew a spike and priced a dropout
+    through the cheap hours at whatever rate the next row fell in. The request starts six hours
+    before the first missing half hour so the row before a gap is in hand.
   - **A garnish.** A failed telemetry request leaves the week as published rather than failing it.
   - **Not quite simultaneous.** A gas reading lands in the half hour the meter woke in, so a
     stand-in mostly holds the half hour before it. Fine for a day's total; a half-hourly bar can
@@ -618,7 +630,10 @@ against real data. Treat those paths as unverified.
   filling is left out — averaged over five minutes it would drag the line's end down — while the
   hour keeps its newest reading, which is whole when taken. Readings sit in fixed slots, so a
   missing one is a gap in place; up to three missing ten-second rows are drawn across, since one
-  goes missing every so often and is no more a gap than the space between two readings.
+  goes missing every so often and is no more a gap than the space between two readings. The
+  first five-minute reading after a gap is averaged over the gap too (`covered`), since its energy
+  covers it, and its tooltip says so; the gap stays a gap, since when within it the energy was used
+  is not known. The demo house carries a gap's energy into its next row the same way.
 - **The newest reading's label sits right of the plot**, in a margin kept for the widest figure.
   Inside the plot a spike just before it — the kettle — ran through the label, and the margin is a
   fixed width so the plot doesn't shift as the figure changes. Its dot has no surface ring: it ends

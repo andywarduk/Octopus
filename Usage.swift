@@ -244,23 +244,48 @@ let homeMiniBucketLabel = "HOME_MINI"
 /// per kWh by `price` — see `standInPricing`. Telemetry carries no standing charge, so each half
 /// hour is given `standingPerHalfHour`, the last one published — which also keeps a half hour that
 /// used nothing counting as data rather than as unpublished, since zero usage is data.
+///
+/// A row's energy is the register's change since the previous row, so after half hours with no
+/// row — the Mini dropped out — it covers those too. It is spread evenly across them and its own,
+/// each priced at its own time, rather than heaped on the one half hour and priced at its rate:
+/// that drew a spike, and charged a dropout through the cheap hours at the standard rate. Shares
+/// falling on half hours Octopus has published are dropped, since its figures already hold them.
+/// Rows before the first missing half hour are read only to find where a gap began.
 func homeMiniFill(
     rows: Any?, missing: Set<Date>, standingPerHalfHour: Double, price: (Date) -> Double?
 ) -> (buckets: [UsageBucket], standing: [(start: Date, pence: Double)], slots: Set<Date>) {
     var buckets: [UsageBucket] = []
     var standing: [(start: Date, pence: Double)] = []
     var slots: Set<Date> = []
+    var readings: [(start: Date, wh: Double?, pence: Double?)] = []
     for case let row as [String: Any] in (rows as? [Any]) ?? [] {
-        guard let start = parseDate(row["readAt"]), missing.contains(start), !slots.contains(start),
-            let wh = toDouble(row["consumptionDelta"])
-        else { continue }
-        slots.insert(start)
-        standing.append((start, standingPerHalfHour))
-        let kwh = wh / 1000
-        guard kwh > 0 else { continue }
-        guard let pence = toDouble(row["costDeltaWithTax"]) ?? price(start).map({ $0 * kwh }) else { continue }
-        buckets.append(
-            UsageBucket(start: start, label: homeMiniBucketLabel, kwh: kwh, pence: pence, pricePerUnit: pence / kwh))
+        guard let start = parseDate(row["readAt"]), !readings.contains(where: { $0.start == start }) else { continue }
+        readings.append((start, toDouble(row["consumptionDelta"]), toDouble(row["costDeltaWithTax"])))
+    }
+    var previous: Date?
+    for reading in readings.sorted(by: { $0.start < $1.start }) {
+        defer { previous = reading.start }
+        guard let wh = reading.wh else { continue }
+        // Its own half hour, and any since the previous row that had none. With no previous row
+        // there is no telling whether a gap came before, so the half hour is taken as whole.
+        var covered = [reading.start]
+        if let previous {
+            var slot = previous.addingTimeInterval(1800)
+            while slot < reading.start {
+                covered.append(slot)
+                slot = slot.addingTimeInterval(1800)
+            }
+        }
+        let share = 1 / Double(covered.count)
+        for slot in covered where missing.contains(slot) && !slots.contains(slot) {
+            slots.insert(slot)
+            standing.append((slot, standingPerHalfHour))
+            let kwh = wh / 1000 * share
+            guard kwh > 0 else { continue }
+            guard let pence = reading.pence.map({ $0 * share }) ?? price(slot).map({ $0 * kwh }) else { continue }
+            buckets.append(
+                UsageBucket(start: slot, label: homeMiniBucketLabel, kwh: kwh, pence: pence, pricePerUnit: pence / kwh))
+        }
     }
     return (buckets, standing, slots)
 }
@@ -317,7 +342,11 @@ func fillFromHomeMini(_ series: UsageSeries, meter: MeterChoice, token: String, 
     let missing = unpublishedHalfHours(series, now: now)
     guard let first = missing.first, let last = missing.last else { return series }
     let electricity = meter.fuel == .electricity
-    var variables: [String: Any] = ["d": device, "s": iso8601(first), "e": iso8601(last.addingTimeInterval(1800))]
+    // From six hours before the first missing half hour, so a dropout running into it can be seen
+    // starting — homeMiniFill needs the row before a gap to spread the energy after it.
+    var variables: [String: Any] = [
+        "d": device, "s": iso8601(first.addingTimeInterval(-6 * 3600)), "e": iso8601(last.addingTimeInterval(1800)),
+    ]
     if electricity { variables["a"] = meter.accountNumber }
     let dispatchDef = electricity ? ",$a:String!" : ""
     let dispatchField = electricity ? "\n  completedDispatches(accountNumber:$a){start end}" : ""

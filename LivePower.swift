@@ -40,6 +40,9 @@ struct LivePowerSeries {
     var start: Date
     /// Watts per slot, nil where nothing was reported.
     var watts: [Double?]
+    /// How many slots each reading's figure is averaged over: 1, or more for the first reading
+    /// after slots with none, whose energy covers them too. Always 1 where `demand` is plotted.
+    var covered: [Int] = []
     /// Energy over the window in Wh, summed from the register's deltas. Exact whatever the grain:
     /// the deltas are differences of one register, so their rounding doesn't accumulate.
     var energyWh: Double
@@ -48,6 +51,8 @@ struct LivePowerSeries {
     var isEmpty: Bool { watts.allSatisfy { $0 == nil } }
 
     func slotStart(_ index: Int) -> Date { start.addingTimeInterval(Double(index) * range.interval) }
+
+    func slotsCovered(_ index: Int) -> Int { covered.indices.contains(index) ? covered[index] : 1 }
 
     var peak: (index: Int, watts: Double)? {
         watts.enumerated().compactMap { item in item.element.map { (item.offset, $0) } }.max { $0.1 < $1.1 }
@@ -69,6 +74,11 @@ struct LivePowerSeries {
 /// bucket: the one still filling holds only the minutes so far, and averaged over five it would
 /// drag the line's end down. The hour ends at the ten-second slot holding `now`, since a demand
 /// reading is complete the moment it is taken.
+///
+/// A delta is the register's change since the last reading, so the first one after buckets with
+/// no rows covers them as well as its own. It is averaged over all of them: divided by its own
+/// five minutes, a car charging at 7 kW through a twenty-minute dropout plotted 2,791 Wh as
+/// 33.5 kW. The gap itself stays a gap, since when within it the energy was used is not known.
 func liveSeries(rows: Any?, range: LivePowerRange, now: Date) -> LivePowerSeries {
     let interval = range.interval
     let count = Int(range.span / interval)
@@ -76,16 +86,32 @@ func liveSeries(rows: Any?, range: LivePowerRange, now: Date) -> LivePowerSeries
     let end = Date(timeIntervalSince1970: range.plotsDemand ? floored + interval : floored)
     let start = end.addingTimeInterval(-range.span)
     var watts = [Double?](repeating: nil, count: count)
+    var covered = [Int](repeating: 1, count: count)
     var energy = 0.0
-    for case let row as [String: Any] in (rows as? [Any]) ?? [] {
-        guard let at = parseDate(row["readAt"]) else { continue }
-        let index = Int((at.timeIntervalSince(start) / interval).rounded(.down))
+    // In time order, so each row knows the last slot before it with a reading — which may be the
+    // bucket before the window, since the request starts one early.
+    let readings = ((rows as? [Any]) ?? []).compactMap { item -> (index: Int, row: [String: Any])? in
+        guard let row = item as? [String: Any], let at = parseDate(row["readAt"]) else { return nil }
+        return (Int((at.timeIntervalSince(start) / interval).rounded(.down)), row)
+    }.sorted { $0.index < $1.index }
+    var previous: Int?
+    for (index, row) in readings {
+        defer { previous = index }
         guard watts.indices.contains(index) else { continue }
         let delta = toDouble(row["consumptionDelta"])
         energy += delta ?? 0
-        watts[index] = range.plotsDemand ? toDouble(row["demand"]) : delta.map { $0 * 3600 / interval }
+        if range.plotsDemand {
+            watts[index] = toDouble(row["demand"])
+            continue
+        }
+        // With nothing earlier in hand, there is no telling whether a gap came before; take the
+        // bucket as whole.
+        let span = previous.map { max(1, index - $0) } ?? 1
+        covered[index] = span
+        watts[index] = delta.map { $0 * 3600 / (interval * Double(span)) }
     }
-    return LivePowerSeries(range: range, start: start, watts: watts, energyWh: energy, fetchedAt: now)
+    return LivePowerSeries(
+        range: range, start: start, watts: watts, covered: covered, energyWh: energy, fetchedAt: now)
 }
 
 /// One request: the meter's telemetry over the range. An empty answer is not an error — it is what

@@ -202,8 +202,15 @@ final class LivePowerChartView: ChartView {
             lines = [TooltipLine("\(formatted(from, day + "HH:mm", tz))–\(formatted(to, "HH:mm", tz))")]
             if let watts = series.watts[index] {
                 // The average is what the bucket's energy works out to; say so, and give the energy.
-                let wh = watts * series.range.interval / 3600
+                let covered = series.slotsCovered(index)
+                let wh = watts * series.range.interval * Double(covered) / 3600
                 lines.append(TooltipLine("\(powerText(watts)) average  ·  \(String(format: "%.0f", wh)) Wh"))
+                if covered > 1 {
+                    // The energy is the register's change across the gap before it, so the
+                    // average is over that whole span, and the reader should know why.
+                    let since = formatted(series.slotStart(index - covered + 1), "HH:mm", tz)
+                    lines.append(TooltipLine("Averaged since \(since) — the Mini sent nothing in between"))
+                }
             } else {
                 lines.append(TooltipLine("No reading"))
             }
@@ -241,13 +248,11 @@ func sampleLivePower(range: LivePowerRange, now: Date) -> LivePowerSeries {
     let first = now.addingTimeInterval(-range.span - interval)
     var rows: [[String: Any]] = []
     var at = Date(timeIntervalSince1970: (first.timeIntervalSince1970 / interval).rounded(.down) * interval)
+    // Energy used while no rows came, which the next row's delta carries, as a real Mini's does.
+    var carried = 0.0
     while at <= now {
         defer { at = at.addingTimeInterval(interval) }
         let minutesAgo = Int(now.timeIntervalSince(at) / 60)
-        // The real gap: two minutes of nothing in the hour, a quarter of an hour in the longer views.
-        if range == .hour ? (24...25).contains(minutesAgo) : (300...314).contains(minutesAgo) { continue }
-        // The stray missing ten-second row.
-        if range == .hour, generator.next() % 40 == 0 { continue }
         let parts = cal.dateComponents([.hour, .minute], from: at)
         let minuteOfDay = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
         var watts = 240 + Double(generator.next() % 30)
@@ -259,10 +264,19 @@ func sampleLivePower(range: LivePowerRange, now: Date) -> LivePowerSeries {
         if (17 * 60 + 30..<18 * 60 + 30).contains(minuteOfDay) { watts += 1600 + Double(generator.next() % 400) }
         // The car, 23:30 to 03:00 at 7.2 kW.
         if minuteOfDay >= 23 * 60 + 30 || minuteOfDay < 3 * 60 { watts += 7200 }
+        let energy = watts * interval / 3600
+        // The real gap — two minutes of nothing in the hour, a quarter of an hour in the longer
+        // views — and the stray missing ten-second row. The meter still turns through both.
+        let realGap = range == .hour ? (24...25).contains(minutesAgo) : (300...314).contains(minutesAgo)
+        if realGap || (range == .hour && generator.next() % 40 == 0) {
+            carried += energy
+            continue
+        }
         rows.append([
             "readAt": iso8601(at), "demand": String(format: "%.1f", watts),
-            "consumptionDelta": String(format: "%.4f", watts * interval / 3600),
+            "consumptionDelta": String(format: "%.4f", energy + carried),
         ])
+        carried = 0
     }
     return liveSeries(rows: rows, range: range, now: now)
 }

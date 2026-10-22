@@ -112,6 +112,8 @@ if let i = CommandLine.arguments.firstIndex(of: "--chartdemo"), i + 1 < CommandL
             ("hour-dark", .hour, true, nil),
             ("hour-tooltip", .hour, false, 200),
             ("6h-light", .sixHours, false, nil),
+            // The first bucket after the gap, whose energy covers the gap too.
+            ("6h-gap-tooltip", .sixHours, false, 13),
             ("24h-light", .day, false, nil),
             ("24h-dark", .day, true, nil),
             ("24h-tooltip", .day, false, 60),
